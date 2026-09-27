@@ -1,0 +1,133 @@
+# =====================================================================
+# Home Assistant package: уличное освещение (участок + двор)
+#
+#  • Вечером, когда освещённость падает ниже порога, включает свет
+#    на участке и во дворе.
+#  • Ровно в 00:00 выключает его.
+#  • Если датчик освещённости недоступен — страховка по закату.
+#
+# Установка:
+#   1. В configuration.yaml:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   2. Скопируйте этот файл в <config>/packages/outdoor_lights.yaml
+#   3. Замените entity_id ниже на свои (sensor.*, light.* / switch.*)
+#   4. Перезапустите Home Assistant.
+# =====================================================================
+
+# Порог освещённости настраивается из интерфейса
+input_number:
+  outdoor_lights_lux_threshold:
+    name: "Порог освещённости для уличного света"
+    min: 1
+    max: 500
+    step: 1
+    initial: 30
+    unit_of_measurement: lx
+    icon: mdi:brightness-6
+
+# Группа уличных светильников — меняйте состав здесь
+light:
+  - platform: group
+    name: "Outdoor lights"   # entity_id: light.outdoor_lights
+    unique_id: outdoor_lights_group
+    entities:
+      - light.uchastok      # свет на участке
+      - light.dvor          # свет во дворе
+    # Если у вас реле (switch.*), замените на switch:
+    #   switch:
+    #     - platform: group
+    #       entities: [switch.uchastok, switch.dvor]
+    # и используйте switch.turn_on / switch.turn_off в автоматизациях.
+
+automation:
+  # ---------------------------------------------------------------
+  # Включение при снижении освещённости вечером
+  # ---------------------------------------------------------------
+  - id: outdoor_lights_on_when_dark
+    alias: "Уличный свет: включить, когда стемнело"
+    mode: single
+    trigger:
+      # Освещённость держится ниже порога 5 минут (защита от облаков/теней)
+      - platform: numeric_state
+        entity_id: sensor.outdoor_illuminance
+        below: input_number.outdoor_lights_lux_threshold
+        for: "00:05:00"
+        id: lux
+      # Страховка: закат, если датчик не работает
+      - platform: sun
+        event: sunset
+        offset: "00:15:00"
+        id: sunset
+      # После перезапуска HA вечером — проверить, не пора ли включить
+      - platform: homeassistant
+        event: start
+        id: restart
+    condition:
+      # Только вечером: с 15:00 до полуночи (после 00:00 не включаем)
+      - condition: time
+        after: "15:00:00"
+        before: "23:59:00"
+      # Свет ещё не включён
+      - condition: state
+        entity_id: light.outdoor_lights
+        state: "off"
+      - condition: or
+        conditions:
+          # Сработал датчик освещённости
+          - condition: trigger
+            id: lux
+          # Закат — только если датчик недоступен
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: sunset
+              - condition: template
+                value_template: >
+                  {{ states('sensor.outdoor_illuminance') in
+                     ['unknown', 'unavailable', 'none'] }}
+          # Перезапуск — только если уже темно
+          - condition: and
+            conditions:
+              - condition: trigger
+                id: restart
+              - condition: or
+                conditions:
+                  - condition: numeric_state
+                    entity_id: sensor.outdoor_illuminance
+                    below: input_number.outdoor_lights_lux_threshold
+                  - condition: state
+                    entity_id: sun.sun
+                    state: below_horizon
+    action:
+      - service: light.turn_on
+        target:
+          entity_id: light.outdoor_lights
+      - service: logbook.log
+        data:
+          name: "Уличный свет"
+          message: >
+            Включён ({{ trigger.id }}), освещённость:
+            {{ states('sensor.outdoor_illuminance') }} lx
+
+  # ---------------------------------------------------------------
+  # Выключение в 00:00
+  # ---------------------------------------------------------------
+  - id: outdoor_lights_off_at_midnight
+    alias: "Уличный свет: выключить в полночь"
+    mode: single
+    trigger:
+      - platform: time
+        at: "00:00:00"
+    condition:
+      - condition: state
+        entity_id: light.outdoor_lights
+        state: "on"
+    action:
+      - service: light.turn_off
+        target:
+          entity_id: light.outdoor_lights
+      - service: logbook.log
+        data:
+          name: "Уличный свет"
+          message: "Выключен по расписанию в 00:00"

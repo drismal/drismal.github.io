@@ -105,7 +105,7 @@ automation:
           entity_id: light.outdoor_lights
       - service: logbook.log
         data:
-          name: "Outdoor lights"   # entity_id: light.outdoor_lights
+          name: "Уличный свет"
           message: >
             Включён ({{ trigger.id }}), освещённость:
             {{ states('sensor.outdoor_illuminance') }} lx
@@ -129,5 +129,5 @@ automation:
           entity_id: light.outdoor_lights
       - service: logbook.log
         data:
-          name: "Outdoor lights"   # entity_id: light.outdoor_lights
+          name: "Уличный свет"
           message: "Выключен по расписанию в 00:00"

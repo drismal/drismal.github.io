@@ -1,0 +1,53 @@
+{
+  "configVersion": "v2",
+  "app": {
+    "appId": 1071939,
+    "appName": "Westworld Host",
+    "appType": "watchface",
+    "version": { "code": 1, "name": "1.0.0" },
+    "vender": "drismal",
+    "description": "Westworld-style watch face: animated ring, location, vitals",
+    "icon": "icon.png"
+  },
+  "permissions": ["gps"],
+  "runtime": {
+    "apiVersion": { "compatible": "1.0.0", "target": "1.0.1", "minVersion": "1.0.0" }
+  },
+  "targets": {
+    "r480": {
+      "module": {
+        "watchface": { "path": "watchface/index", "main": 1, "editable": 0, "lockscreen": 1 }
+      },
+      "platforms": [
+        { "name": "GTR 3 Pro", "deviceSource": 229 },
+        { "name": "GTR 3 Pro", "deviceSource": 230 },
+        { "name": "GTR 3 Pro", "deviceSource": 242 },
+        { "name": "GTR 3 Pro", "deviceSource": 6095106 },
+        { "name": "480x480 round", "deviceSource": 8126720 },
+        { "name": "480x480 round", "deviceSource": 8126721 },
+        { "name": "480x480 round", "deviceSource": 8126727 },
+        { "name": "Balance", "deviceSource": 8519936 },
+        { "name": "Balance", "deviceSource": 8519937 },
+        { "name": "Balance", "deviceSource": 8519939 },
+        { "name": "T-Rex 3", "deviceSource": 9437441 }
+      ],
+      "designWidth": 480
+    },
+    "r466": {
+      "module": {
+        "watchface": { "path": "watchface/index", "main": 1, "editable": 0, "lockscreen": 1 }
+      },
+      "platforms": [
+        { "name": "GTR 4", "deviceSource": 7930112 },
+        { "name": "GTR 4", "deviceSource": 7930113 },
+        { "name": "T-Rex 3 Pro 44mm", "deviceSource": 10682624 },
+        { "name": "T-Rex 3 Pro 44mm", "deviceSource": 10682625 },
+        { "name": "T-Rex 3 Pro 44mm", "deviceSource": 10682627 }
+      ],
+      "designWidth": 466
+    }
+  },
+  "i18n": { "en-US": { "appName": "Westworld Host" } },
+  "defaultLanguage": "en-US",
+  "debug": false
+}

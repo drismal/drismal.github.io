@@ -149,7 +149,7 @@ void main(){
   float ink0=outer0*(1.-inner);          // the ring itself
   float spk=max(ink-ink0,0.);            // spike area: filled faintly, the dots carry it
 
-  // bleed haze, radial hair fringe (heavy on the crescent side), dust
+  // soft bleed haze just outside the rim
   float out_=max(r-Ro,0.);
   float rim=smoothstep(Ro-.003,Ro+.003,r);
   float haze=rim*exp(-out_/.018)*smoothstep(.42,.75,n2)*.55*uWob;
@@ -157,27 +157,21 @@ void main(){
 
   // ---- soft black mass (crescent) on the disturbed side ----
   // the white disc keeps a crisp edge; the mass slides over it with a
-  // blurred boundary striated by radial streaks (noise fast in angle, slow in radius)
-  float strk=noise(vec3(dir*38.,r*2.5+uT*.1));
-  float strk2=noise(vec3(dir*18.,r*1.5-uT*.05));
+  // smooth blurred boundary (broad low-frequency waves only)
+  float strk2=noise(vec3(dir*6.,r*1.2-uT*.05));
   vec2 cm=-vec2(cos(uFrAng),sin(uFrAng))*uMass*.24;
-  float Rim=Rb+(strk-.5)*.05*uMass+(strk2-.5)*.04*uMass;
+  float Rim=Rb+(strk2-.5)*.05*uMass;
   float mIn=smoothstep(Rim-.075*uMass-.002,Rim+.075*uMass+.002,length(p-cm));
-  float Rom=Rb+uMass*(.015+.22*side*(.7+.6*strk2))+(strk-.5)*.06*uMass;
+  float Rom=Rb+uMass*(.015+.22*side*(.7+.6*strk2));
   float mOut=1.-smoothstep(Rom-.08*uMass-.002,Rom+.08*uMass+.002,r);
   float mass=mIn*mOut*smoothstep(0.,.05,uMass);
 
-  float hair=noise(vec3(dir*46.,r*9.+uT*.25));
-  float fr=rim*exp(-out_/(.015+.10*side))*smoothstep(.35,.85,hair)*uFringe*(.25+.9*side);
-  float dustD=rim*exp(-out_/.04)*uDust*smoothstep(.35,.7,n1);
-  float spec=step(1.-dustD*.5,hash2(floor(gl_FragCoord.xy/1.5)));
-  float A=clamp(ink0*.9*(1.-.85*uFocus)+spk*uSpikeFill+mass*(1.-ink)+haze*(1.-ink)+fr*(1.-ink)+spec*(1.-inner),0.,1.);
-  A*=1.-uGrain*.55*hash2(floor(gl_FragCoord.xy*.8)+floor(uT*6.));
+  // layers combine like stacked ink (never lighter where they overlap)
+  float A=1.-(1.-ink0*(1.-.85*uFocus))*(1.-spk*uSpikeFill)*(1.-mass)*(1.-haze*(1.-ink));
+  A*=1.-uGrain*.55*(1.-mass)*hash2(floor(gl_FragCoord.xy*.8)+floor(uT*6.));
 
-  // relief shading: slopes of the displaced ink catch a little light
-  vec3 n=normalize(cross(dFdx(vL),dFdy(vL)));
-  float slope=1.-abs(n.z);
-  vec3 col=vec3(uTone)+.03*n2+slope*.32*uTilt;   // relief shows only when the disc turns
+  // flat black ink: the volume reads through parallax only
+  vec3 col=(vec3(uTone)+.03*n2)*(1.-.7*mass);   // the mass is the deepest black
   col+=(hash2(gl_FragCoord.xy+fract(uT)*100.)-.5)*.02;
   col=mix(col,1.-col,uInv);
   gl_FragColor=vec4(col,A);
@@ -232,7 +226,7 @@ void main(){
     alpha=smoothstep(.002,.012,sp.y)*(1.-smoothstep(.85,1.,s)*.7)*step(u1,uCdf[${NSP-1}]);
   }else if(aType<2.5){
     r=Rb+pow(u2,1.5)*(.02+.1*uFringe); z=(u3-.5)*.05;
-    g=.3+.4*u3; size=1.+2.5*u4; alpha=(.12+.6*uFringe)*(1.-u2);
+    g=.3+.4*u3; size=1.+2.5*u4; alpha=.08*(1.-u2)*(1.-uMass);
   }else{
     float side=smoothstep(-.3,1.,cos(th-uFrAng));
     vec2 cm=-vec2(cos(uFrAng),sin(uFrAng))*uMass*.24;
@@ -240,10 +234,10 @@ void main(){
     float rin=dc+sqrt(max(0.,Rb*Rb-dot(cm,cm)+dc*dc));      // where the white disc ends along dir
     float Rom=Rb+uMass*(.015+.22*side);
     r=mix(rin-.03*uMass,Rom,pow(u2,.8)); z=(u3-.5)*uZ*2.;
-    g=.03+.15*u3; size=1.5+2.*u4; alpha=uMass*side*smoothstep(rin,rin+.08,r);
+    g=.005+.04*u3; size=1.5+2.*u4; alpha=uMass*side*smoothstep(rin+.04,rin+.12,r)*(1.-smoothstep(Rom-.06,Rom,r));
   }
   float inMass=uMass*smoothstep(-.3,1.,cos(th-uFrAng));
-  if(aType<2.5)g*=1.-.85*inMass;
+  if(aType<2.5){g*=1.-.85*inMass;alpha*=1.-.9*inMass*smoothstep(Rb-.03,Rb+.01,r+.04*uMass);}   // dots dissolve into the solid mass
   vec3 pos=vec3(dir*r/.4,z/.4);
   vec4 mv=modelViewMatrix*vec4(pos,1.);
   gl_Position=projectionMatrix*mv;
@@ -571,7 +565,6 @@ function frame(now){
   mesh.rotation.y=(Q.has('yaw')?+Q.get('yaw'):.12*Math.sin(t*.11)*sway*(1-.7*fe))+dragYaw;
   mesh.rotation.x=(Q.has('pitch')?+Q.get('pitch'):.07*Math.sin(t*.07+1)*sway)+dragPitch;
   mesh.updateMatrixWorld();
-  U.uTilt.value=clamp01((Math.abs(mesh.rotation.y)+Math.abs(mesh.rotation.x))*2.5);
 
   renderer.render(scene,camera);
   $('hud').style.filter=`invert(${P.uInv})`;

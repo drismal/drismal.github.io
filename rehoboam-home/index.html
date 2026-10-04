@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="theme-color" content="#000000">
+<title>Rehoboam Home</title>
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  html,body{margin:0;height:100%;background:#f9f9f6;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
+  canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
+  #hud{position:fixed;inset:0;pointer-events:none;font-family:"RC","Barlow Condensed","Arial Narrow",sans-serif}
+  svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+  svg .ln{fill:none;stroke:#2b2b2b;stroke-linejoin:miter;stroke-linecap:butt}
+  svg text{fill:#1d1d1d;letter-spacing:.02em}
+</style>
+</head>
+<body>
+<div id="hud">
+<svg id="svg">
+  <g id="head">
+    <path id="hbr" class="ln" pathLength="1"/>
+    <text id="hdt"></text>
+    <text id="hdv"><tspan id="hdv1"></tspan><tspan id="hdv2"></tspan></text>
+    <text id="hce"></text>
+  </g>
+  <g id="calls"></g>
+</svg>
+</div>
+<script src="vendor/three.min.js"></script>
+<script>
+"use strict";
+/* =====================================================================
+   REHOBOAM — one continuous, volumetric, data-driven animation.
+
+   A polar mesh (the disc) is displaced in Z by the ink field (vertex
+   shader) and the ink itself is computed per pixel (fragment shader).
+   Field units ("u"): the ring radius is uRad = 0.4 u; the mesh is in
+   world units where 1 world = 0.4 u (ring radius = 1 world).
+
+   Data -> shape:
+     every sensor owns an angle on the ring; its divergence (0..1) is the
+     height of its spike (spring-damped);
+     global divergence D drives thickness, crescent offset, hair fringe,
+     dust, swelling mass; the crescent forms on the side of the strongest
+     disturbance.
+   ===================================================================== */
+
+const NSP = 12;   // max spikes (sensors)
+const COMMON = `
+uniform float uFocusAng,uFocus,uSpikeFill,uTilt,uT,uWob,uScal,uThick,uOff,uOffAng,uMass,uRad,uSpikeW,uDust,uFringe,uFrAng,uGrain,uTone,uInv,uZ;
+uniform vec4 uSp[${NSP}];
+uniform float uCdf[${NSP}];  // cumulative spike heights: tower dots go where the spikes are   // x = angle, y = height (u), z = width factor, w = unused
+const float PI=3.14159265;
+float hash(vec3 p){p=fract(p*.3183099+.1);p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
+float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float noise(vec3 x){
+  vec3 i=floor(x),f=fract(x);f=f*f*(3.-2.*f);
+  return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),
+             mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
+}
+float fbm(vec3 p){float s=0.,a=.5;for(int i=0;i<5;i++){s+=a*noise(p);p*=2.03;a*=.5;}return s;}
+float angd(float a,float b){return abs(mod(a-b+PI,2.*PI)-PI);}
+
+// Sum of all sensor spikes at angle a: a conical needle, two side bristles,
+// and a travelling ripple on the rim around its base.
+float spikes(float a){
+  float s=0.;
+  for(int i=0;i<${NSP};i++){
+    vec4 sp=uSp[i];
+    float d=angd(a,sp.x);
+    float w=uSpikeW*sp.z;
+    float needle=pow(max(0.,1.-d/w),2.6);
+    // moderate divergence -> stepped 'city spire'; strong -> clean needle
+    float blk=1.-smoothstep(.05,.11,sp.y);
+    float stp=floor(needle*5.+.9*noise(vec3(cos(a)*160.,sin(a)*160.,sp.x*7.+uT*.05)))/5.;
+    needle=mix(needle,max(stp,0.),blk*step(.001,needle));
+    float br=.35*pow(max(0.,1.-angd(a,sp.x+w*1.25)/(w*.45)),2.)
+            +.25*pow(max(0.,1.-angd(a,sp.x-w*1.1)/(w*.35)),2.);
+    br*=.6+.4*sin(uT*1.7+sp.x*5.);
+    float rip=.05*sin(d*90.-uT*2.5)*exp(-d/(w*2.5));
+    s+=sp.y*(needle+br+rip);
+  }
+  return s;
+}
+`;
+
+const VS = COMMON + `
+varying vec2 vP; varying vec3 vL;
+void main(){
+  vec2 p=position.xy*.4;
+  float r=length(p), a=atan(p.y,p.x);
+  vec2 dir=p/max(r,1e-4);
+  float n1=fbm(vec3(dir*2.2,uT*.22));
+  float Rb=uRad+uWob*(n1-.5)*.06;
+  float sp=spikes(a);
+  float sw=.012;
+  float Ro=Rb+sp;
+  float outer=1.-smoothstep(Ro-sw,Ro+sw,r);
+  vec2 c=vec2(cos(uOffAng),sin(uOffAng))*uOff;
+  float Ri=Rb-uThick;
+  float inner=1.-smoothstep(Ri-sw,Ri+sw,length(p-c));
+  float ink=outer*(1.-inner);
+  // ink is a raised, lumpy relief; spikes also rise toward the viewer
+  // soft crescent mass (same construction as in the fragment shader, without detail)
+  float side=smoothstep(-.3,1.,cos(a-uFrAng));
+  vec2 cm=-vec2(cos(uFrAng),sin(uFrAng))*uMass*.24;
+  float mIn=smoothstep(Rb-.06*uMass-.002,Rb+.06*uMass+.002,length(p-cm));
+  float Rom=Rb+uMass*(.015+.22*side);
+  float mOut=1.-smoothstep(Rom-.08*uMass-.002,Rom+.08*uMass+.002,r);
+  float mass=mIn*mOut*smoothstep(0.,.05,uMass);
+  float lump=.35+.65*fbm(vec3(p*14.,uT*.3));
+  float z=ink*uZ*lump+mass*uZ*1.8*lump;
+  z+=sp*.45*smoothstep(Rb,Rb+max(sp,1e-4),r)*(1.-smoothstep(Ro,Ro+.04,r));
+  vec3 pos=vec3(position.xy,z/.4);
+  vP=position.xy; vL=pos;
+  gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.);
+}`;
+
+const FS = COMMON + `
+varying vec2 vP; varying vec3 vL;
+void main(){
+  vec2 p=vP*.4;
+  float r=length(p), a=atan(p.y,p.x);
+  vec2 dir=p/max(r,1e-4);
+  float aa=fwidth(r);
+
+  // edge: circle + regular scallops + slow ink wander + sensor spikes
+  float n1=fbm(vec3(dir*2.2,uT*.22));
+  float n2=fbm(vec3(dir*11.,uT*.55));
+  float n3=noise(vec3(dir*38.,uT*1.4));
+  float Rb=uRad+uWob*(n1-.5)*.06;
+  float ph=a*30.+(n1-.5)*2.2+uT*.15;
+  float scal=uScal*(sin(ph)*.7+sin(ph*.5+1.3)*.3)*(.75+.5*noise(vec3(dir*5.,uT*.3)));
+  float Ro0=Rb+scal+uWob*((n2-.5)*.02+(n3-.5)*.006);
+  float Ro=Ro0+spikes(a);
+  float soft=max(.0018,aa*1.2);
+  float outer=1.-smoothstep(Ro-soft,Ro+soft,r);
+  float outer0=1.-smoothstep(Ro0-soft,Ro0+soft,r);
+
+  // inner disc, offset -> crescent; thickness wanders along the rim
+  vec2 c=vec2(cos(uOffAng),sin(uOffAng))*uOff;
+  float th=uThick*(.65+.7*noise(vec3(dir*14.,uT*.2)));
+  float Ri=Rb-th+scal*.6+(n2-.5)*.004*uWob;
+  float di=length(p-c);
+  float isoft=max(.0014,aa*1.2);
+  float inner=1.-smoothstep(Ri-isoft,Ri+isoft,di);
+  float ink=outer*(1.-inner);
+  float ink0=outer0*(1.-inner);          // the ring itself
+  float spk=max(ink-ink0,0.);            // spike area: filled faintly, the dots carry it
+
+  // soft bleed haze just outside the rim
+  float out_=max(r-Ro,0.);
+  float rim=smoothstep(Ro-.003,Ro+.003,r);
+  float haze=rim*exp(-out_/.018)*smoothstep(.42,.75,n2)*.55*uWob;
+  float side=smoothstep(-.3,1.,cos(a-uFrAng));
+
+  // ---- soft black mass (crescent) on the disturbed side ----
+  // the white disc keeps a crisp edge; the mass slides over it with a
+  // smooth blurred boundary (broad low-frequency waves only)
+  float strk2=noise(vec3(dir*6.,r*1.2-uT*.05));
+  vec2 cm=-vec2(cos(uFrAng),sin(uFrAng))*uMass*.24;
+  float Rim=Rb+(strk2-.5)*.05*uMass;
+  float mIn=smoothstep(Rim-.075*uMass-.002,Rim+.075*uMass+.002,length(p-cm));
+  float Rom=Rb+uMass*(.015+.22*side*(.7+.6*strk2));
+  float mOut=1.-smoothstep(Rom-.08*uMass-.002,Rom+.08*uMass+.002,r);
+  float mass=mIn*mOut*smoothstep(0.,.05,uMass);
+
+  // layers combine like stacked ink (never lighter where they overlap)
+  float A=1.-(1.-ink0*(1.-.85*uFocus))*(1.-spk*uSpikeFill)*(1.-mass)*(1.-haze*(1.-ink));
+  A*=1.-uGrain*.55*(1.-mass)*hash2(floor(gl_FragCoord.xy*.8)+floor(uT*6.));
+
+  // flat black ink: the volume reads through parallax only
+  vec3 col=(vec3(uTone)+.03*n2)*(1.-.7*mass);   // the mass is the deepest black
+  col+=(hash2(gl_FragCoord.xy+fract(uT)*100.)-.5)*.02;
+  col=mix(col,1.-col,uInv);
+  gl_FragColor=vec4(col,A);
+}`;
+
+
+/* ---------- particles: the ink is a cloud of dots ----------
+   type 0 ring band  : dense, crisp inner edge, exponential sparse tail outward
+   type 1 spike tower: dots stream up each sensor's spike, narrowing to the tip
+   type 2 halo dust  : sparse dots around the rim, grows with divergence
+   type 3 mass grain : dots filling the crescent mass                         */
+const PVS = COMMON + `
+attribute vec4 aR;
+attribute float aType;
+uniform float uPx;
+varying float vG, vA;
+void main(){
+  float u1=aR.x,u2=aR.y,u3=aR.z,u4=aR.w;
+  int k=0;
+  for(int i=0;i<${NSP};i++){if(u1>uCdf[i])k=i+1;}
+  k=k>${NSP-1}?${NSP-1}:k;
+  vec4 sp=uSp[k];
+  float sw=uSpikeW*sp.z;
+  float s=pow(fract(u2+uT*.06*(.4+u4)),1.6);     // position along the tower, streaming upward
+  // 1) angle
+  float th;
+  float arc=uFocusAng+(u1-.5)*2.4;
+  if(aType<.5)      th=mix(u1*2.*PI,arc,uFocus)+uT*(u4-.5)*.03;
+  else if(aType<1.5)th=sp.x+(u3-.5)*2.*sw*(1.-pow(s,1./2.6));
+  else if(aType<2.5)th=mix(u1*2.*PI,arc,uFocus)+uT*(u4-.5)*.05;
+  else              th=uFrAng+(u1-.5)*PI*1.25;
+  vec2 dir=vec2(cos(th),sin(th));
+  float n1=fbm(vec3(dir*2.2,uT*.22));
+  float Rb=uRad+uWob*(n1-.5)*.06;
+  float W=uThick*(1.+2.6*uFocus);   // the close-up reveals a heavy band of dots
+  // 2) radius, depth, tone, size
+  float r,z,g,size,alpha=1.;
+  if(aType<.5){
+    vec2 ci=vec2(cos(uOffAng),sin(uOffAng))*uOff;
+    float di0=dot(dir,ci);
+    float Wl=max(W,Rb-(di0+sqrt(max(0.,(Rb-uThick)*(Rb-uThick)-dot(ci,ci)+di0*di0))));
+    float off;
+    if(u2<.6){off=-Wl*u3;g=.02+.12*u4;size=1.4+1.8*fract(u4*7.3);}
+    else{float tail=-log(1.-u3*.985);off=W*mix(.16,.25,uFocus)*tail*(1.+uWob*.8);
+         g=.12+.35*fract(u4*13.1)+.04*tail;size=1.2+2.6*fract(u4*3.7);
+         alpha=mix(.35,.75,uFocus)*(1.-smoothstep(2.,5.,tail)*.6);}
+    off+=(noise(vec3(dir*30.,uT*.6+u4*10.))-.5)*W*.3;
+    r=Rb+off; z=(u4-.5)*W*2.;
+  }else if(aType<1.5){
+    r=Rb+s*sp.y; z=s*sp.y*.45+(u4-.5)*.004;
+    g=.04+.2*s*fract(u4*5.); size=1.3+1.8*fract(u4*9.1);
+    alpha=smoothstep(.002,.012,sp.y)*(1.-smoothstep(.85,1.,s)*.7)*step(u1,uCdf[${NSP-1}]);
+  }else if(aType<2.5){
+    r=Rb+pow(u2,1.5)*(.02+.1*uFringe); z=(u3-.5)*.05;
+    g=.3+.4*u3; size=1.+2.5*u4; alpha=.08*(1.-u2)*(1.-uMass);
+  }else{
+    float side=smoothstep(-.3,1.,cos(th-uFrAng));
+    vec2 cm=-vec2(cos(uFrAng),sin(uFrAng))*uMass*.24;
+    float dc=dot(dir,cm);
+    float rin=dc+sqrt(max(0.,Rb*Rb-dot(cm,cm)+dc*dc));      // where the white disc ends along dir
+    float Rom=Rb+uMass*(.015+.22*side);
+    r=mix(rin-.03*uMass,Rom,pow(u2,.8)); z=(u3-.5)*uZ*2.;
+    g=.005+.04*u3; size=1.5+2.*u4; alpha=uMass*side*smoothstep(rin+.04,rin+.12,r)*(1.-smoothstep(Rom-.06,Rom,r));
+  }
+  float inMass=uMass*smoothstep(-.3,1.,cos(th-uFrAng));
+  if(aType<2.5){g*=1.-.85*inMass;alpha*=1.-.9*inMass*smoothstep(Rb-.03,Rb+.01,r+.04*uMass);}   // dots dissolve into the solid mass
+  vec3 pos=vec3(dir*r/.4,z/.4);
+  vec4 mv=modelViewMatrix*vec4(pos,1.);
+  gl_Position=projectionMatrix*mv;
+  size*=mix(aType<.5?.7:1.,.85,uFocus);
+  gl_PointSize=size*uPx/(-mv.z);
+  vG=g; vA=alpha;
+}`;
+const PFS = `
+uniform float uInv;
+varying float vG, vA;
+void main(){
+  float d=length(gl_PointCoord-.5);
+  float a=smoothstep(.5,.32,d)*vA;
+  if(a<.01)discard;
+  vec3 c=vec3(vG); c=mix(c,1.-c,uInv);
+  gl_FragColor=vec4(c,a*.9);
+}`;
+
+/* ---------- three.js setup ---------- */
+const Q=new URLSearchParams(location.search);
+const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(30,1,.1,50);
+const RING_SCREEN=.385;   // ring radius as a fraction of screen height
+camera.position.z=(.5/RING_SCREEN)/Math.tan(15*Math.PI/180);
+
+// polar grid: angular x radial, radius 0..1.95 world
+function polarGeometry(nA,nR,r0,r1){
+  const pos=new Float32Array((nA+1)*(nR+1)*3), idx=[];
+  let k=0;
+  for(let j=0;j<=nR;j++){const r=r0+(r1-r0)*j/nR;
+    for(let i=0;i<=nA;i++){const a=i/nA*Math.PI*2;pos[k++]=Math.cos(a)*r;pos[k++]=Math.sin(a)*r;pos[k++]=0;}}
+  for(let j=0;j<nR;j++)for(let i=0;i<nA;i++){
+    const a=j*(nA+1)+i,b=a+1,c=a+nA+1,d=c+1;idx.push(a,c,b,b,c,d);}
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  g.setIndex(idx);return g;
+}
+const LOW=Q.get('q')==='low';
+const geo=polarGeometry(LOW?360:640,LOW?140:260,0.,1.95);
+
+const U={
+  uFocusAng:{value:0},uFocus:{value:0},uSpikeFill:{value:.7},uTilt:{value:0},uT:{value:0},uWob:{value:.22},uScal:{value:.0017},uThick:{value:.0072},uOff:{value:0},uOffAng:{value:0},
+  uMass:{value:0},uRad:{value:.4},uSpikeW:{value:.06},uDust:{value:0},uFringe:{value:0},uFrAng:{value:Math.PI},
+  uGrain:{value:.3},uTone:{value:.13},uInv:{value:0},uZ:{value:.02},
+  uSp:{value:Array.from({length:NSP},()=>new THREE.Vector4(0,0,1,0))},
+  uCdf:{value:new Array(NSP).fill(0).map((_,i)=>(i+1)/NSP)},
+};
+const mat=new THREE.ShaderMaterial({uniforms:U,vertexShader:VS,fragmentShader:FS,
+  transparent:true,depthWrite:false,side:THREE.DoubleSide,extensions:{derivatives:true}});
+const mesh=new THREE.Mesh(geo,mat);scene.add(mesh);
+
+const NPART=LOW?50000:140000;
+const pg=new THREE.BufferGeometry();
+{
+  const R=new Float32Array(NPART*4),T=new Float32Array(NPART),P0=new Float32Array(NPART*3);
+  for(let i=0;i<NPART;i++){
+    for(let j=0;j<4;j++)R[i*4+j]=Math.random();
+    const u=Math.random();T[i]=u<.7?0:u<.82?1:u<.9?2:3;
+  }
+  pg.setAttribute('position',new THREE.BufferAttribute(P0,3));
+  pg.setAttribute('aR',new THREE.BufferAttribute(R,4));
+  pg.setAttribute('aType',new THREE.BufferAttribute(T,1));
+}
+const PU=Object.assign({uPx:{value:1}},U);   // particles share the field uniforms
+const pmat=new THREE.ShaderMaterial({uniforms:PU,vertexShader:PVS,fragmentShader:PFS,transparent:true,depthWrite:false,depthTest:false});
+const points=new THREE.Points(pg,pmat);points.frustumCulled=false;
+mesh.add(points);   // rides with the disc's rotation
+
+let W=innerWidth,H=innerHeight;
+function resize(){W=innerWidth;H=innerHeight;renderer.setSize(W,H);camera.aspect=W/H;camera.updateProjectionMatrix();
+  document.getElementById('svg').setAttribute('viewBox',`0 0 ${W} ${H}`);}
+addEventListener('resize',resize);resize();
+
+/* ---------- sensors: each owns an angle on the ring (deg, CCW from +x) ---------- */
+const SENSORS=[
+  {id:'temp', name:'TEMPERATURE', place:'LIVING ROOM', ang:200, w:1.0},
+  {id:'hum',  name:'HUMIDITY',    place:'BEDROOM',     ang:38,  w:.8},
+  {id:'door', name:'DOOR',        place:'ENTRANCE',    ang:178, w:1.3},
+  {id:'light',name:'LIGHTS',      place:'WHOLE HOUSE', ang:62,  w:.9},
+  {id:'bat',  name:'BATTERY',     place:'SENSOR 07',   ang:236, w:.7},
+  {id:'net',  name:'CONNECTIVITY',place:'ZIGBEE',      ang:338, w:.9},
+  {id:'pwr',  name:'ENERGY',      place:'MAIN PANEL',  ang:146, w:1.1},
+  {id:'co2',  name:'CO2',         place:'KITCHEN',     ang:14,  w:.8},
+  {id:'mot',  name:'MOTION',      place:'HALLWAY',     ang:272, w:1.2},
+  {id:'water',name:'WATER',       place:'BATHROOM',    ang:306, w:1.0},
+];
+SENSORS.forEach((s,i)=>Object.assign(s,{i,a:s.ang*Math.PI/180,div:0,target:.03,h:0,v:0,vis:0,y:null,str:''}));
+const byId=Object.fromEntries(SENSORS.map(s=>[s.id,s]));
+
+const SNAP=Q.get('snap')==='1';
+const FIXED_T=Q.has('t')?+Q.get('t'):null;
+let auto=!Q.has('d');
+if(Q.has('d'))Q.get('d').split(',').forEach((v,i)=>{if(SENSORS[i])SENSORS[i].target=+v;});
+
+/* public API for the smart-home bridge */
+let focusId=Q.get('focus')||null, focusK=focusId?1:0, focusUntil=Infinity;
+window.Rehoboam={
+  focus(id,ms){focusId=id;focusUntil=ms?performance.now()+ms:Infinity;},
+  set(id,div){const s=byId[id];if(s){s.target=Math.max(0,Math.min(1,div));s.hold=performance.now()+8000;}},
+  sensors:SENSORS,
+  auto(on){auto=on;},
+};
+
+/* ---------- demo driver (until real data is connected) ---------- */
+let nextEvt=0;
+function simulate(now,dt){
+  // targets relax back toward calm unless held (fixed ?d= values never relax)
+  if(Q.has('d'))return;
+  SENSORS.forEach(s=>{if(!(s.hold>now))s.target+=(.03-s.target)*Math.min(1,dt*.12);});
+  if(!auto||now<nextEvt)return;
+  const r=Math.random();
+  if(r<.12){ // cascade: many sensors diverge at once
+    SENSORS.forEach(s=>{if(Math.random()<.7){s.target=.5+Math.random()*.5;s.hold=now+6000;}});
+    nextEvt=now+11000;
+  }else{
+    const s=SENSORS[Math.floor(Math.random()*SENSORS.length)];
+    s.target=.15+Math.pow(Math.random(),1.5)*.8;s.hold=now+3000+Math.random()*4000;
+    // a strong single event in a calm house: the camera moves in on it
+    if(s.target>.6&&D<.3&&!focusId&&Math.random()<.6)Rehoboam.focus(s.id,7000);
+    nextEvt=now+1800+Math.random()*3500;
+  }
+}
+
+/* ---------- interaction ---------- */
+let drag=null,dragYaw=0,dragPitch=0,invT=Q.get('inv')==='1'?1:0;
+addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw:dragYaw,pitch:dragPitch};});
+addEventListener('pointermove',e=>{if(!drag)return;
+  dragYaw=Math.max(-.9,Math.min(.9,drag.yaw+(e.clientX-drag.x)/W*2.2));
+  dragPitch=Math.max(-.7,Math.min(.7,drag.pitch+(e.clientY-drag.y)/H*1.8));});
+addEventListener('pointerup',()=>drag=null);addEventListener('pointercancel',()=>drag=null);
+addEventListener('keydown',e=>{
+  const k='1234567890'.indexOf(e.key);
+  if(k>=0&&SENSORS[k])Rehoboam.set(SENSORS[k].id,.9);
+  if(e.key==='c')SENSORS.forEach(s=>Rehoboam.set(s.id,.6+Math.random()*.4));
+  if(e.key==='r')SENSORS.forEach(s=>{s.target=.03;s.hold=0;});
+  if(e.key==='a')auto=!auto;
+  if(e.key==='i')invT=1-invT;
+  if(e.key==='f'){if(focusId)focusId=null;else{let t=SENSORS.reduce((a,b)=>b.div>a.div?b:a);Rehoboam.focus(t.id);}}
+});
+
+/* ---------- HUD helpers ---------- */
+const $=id=>document.getElementById(id);
+const NS='http://www.w3.org/2000/svg';
+const clamp01=x=>Math.max(0,Math.min(1,x)), ease=x=>x*x*(3-2*x);
+const smooth=(a,b,x)=>{const t=clamp01((x-a)/(b-a));return t*t*(3-2*t);};
+const typedP=(s,p)=>s.slice(0,Math.round(s.length*clamp01(p)));
+function mk(tag,cls){const e=document.createElementNS(NS,tag);if(cls)e.setAttribute('class',cls);return e;}
+function setDraw(el,k){el.style.strokeDasharray='1 1.001';el.style.strokeDashoffset=String(1-k);el.style.opacity=k>0?1:0;}
+function hexPts(x,y,r){let o=[];for(let k=0;k<6;k++){const a=(-90+60*k)*Math.PI/180;o.push([x+r*Math.cos(a),y+r*Math.sin(a)]);}return o;}
+
+// build one callout per sensor (hidden until the sensor diverges)
+SENSORS.forEach(s=>{
+  const g=mk('g'),br=mk('path','ln'),ld=mk('polyline','ln'),hx=mk('polygon','ln'),
+        tt=mk('text'),b=mk('tspan'),n=mk('tspan'),l2=mk('text'),l3=mk('text');
+  [br,ld,hx].forEach(e=>e.setAttribute('pathLength',1));
+  b.style.fontWeight=600;n.style.fontWeight=300;tt.append(b,n);
+  g.append(br,ld,hx,tt,l2,l3);$('calls').appendChild(g);
+  s.el={g,br,ld,hx,tt,b,n,l2,l3};
+});
+
+function project(x,y,z){const v=new THREE.Vector3(x,y,z).applyMatrix4(mesh.matrixWorld).project(camera);
+  return [(v.x+1)/2*W,(1-v.y)/2*H];}
+
+function layoutCallouts(dt){
+  const s=Math.max(.75,H/525), bw=175*s, gap=40*s, top=128*s, bot=H-34*s;
+  const [cx,cy]=project(0,0,0);
+  const groups={L:[],R:[]};
+  SENSORS.forEach(se=>{
+    let active=se.div>(se.vis>.01?.13:.18);
+    if(focusK>.3)active=se.id===focusId;
+    se.vis+=((active?1:0)-se.vis)*Math.min(1,dt*(active?1.6:2.4));
+    if(SNAP)se.vis=active?1:0;
+    if(se.vis<.003){se.el.g.style.display='none';return;}
+    se.el.g.style.display='';
+    const hh=se.h*hScale, tipR=(.4+.85*hh)/.4+.03;   // the needle's last 15% is sub-pixel thin
+    se.tip=project(Math.cos(se.a)*tipR,Math.sin(se.a)*tipR,hh*.45/.4);
+    se.side=Math.cos(se.a)<0?'L':'R';
+    groups[se.side].push(se);
+  });
+  if(focusK>.3){SENSORS.forEach(se=>{if(se.vis<.003)return;
+      se.side='R';se.ty=Math.max(24*s,se.tip[1]-70*s);se.y=(se.y===null||SNAP)?se.ty:se.y+(se.ty-se.y)*Math.min(1,dt*4);se.fx=se.tip[0]+70*s;});}
+  else for(const side of ['L','R']){
+    const g=groups[side].sort((a,b)=>a.tip[1]-b.tip[1]);
+    const gp=g.length>1?Math.min(gap,(bot-top)/(g.length-1)):gap;
+    g.forEach(se=>se.ty=Math.max(top,Math.min(bot,se.tip[1]-12*s)));
+    for(let i=1;i<g.length;i++)g[i].ty=Math.max(g[i].ty,g[i-1].ty+gp);
+    for(let i=g.length-1;i>=0;i--)g[i].ty=Math.min(g[i].ty,i<g.length-1?g[i+1].ty-gp:bot);
+    for(let i=0;i<g.length;i++)g[i].ty=Math.max(g[i].ty,i?g[i-1].ty+gp:top);
+    g.forEach(se=>{se.y=(se.y===null||SNAP)?se.ty:se.y+(se.ty-se.y)*Math.min(1,dt*4);});
+  }
+  SENSORS.forEach(se=>{
+    if(se.vis<.003)return;
+    const e=se.el,p=se.vis,x=focusK>.3?Math.min(se.fx,W-bw-10*s):se.side==='L'?.025*W:W-.025*W-bw,y=se.y,ey=y+24*s;
+    e.br.setAttribute('d',`M${x},${y-10*s} L${x},${ey-4*s} L${x+4*s},${ey} L${x+bw*.92},${ey}`);
+    // hexagon sits just beyond the spike tip, pushed outward from the centre
+    let dx=se.tip[0]-cx,dy=se.tip[1]-cy;const dl=Math.hypot(dx,dy)||1;dx/=dl;dy/=dl;
+    const hr=(focusK>.3?16:7)*s,hxp=se.tip[0]+dx*hr*1.6,hyp=se.tip[1]+dy*hr*1.6;
+    const hv=hexPts(hxp,hyp,hr);
+    const ex=se.side==='L'?x+bw*.92:x;
+    // attach the leader to the hexagon vertex facing the box
+    let best=hv[0],bd=1e9;hv.forEach(v=>{const d=Math.hypot(v[0]-ex,v[1]-ey);if(d<bd){bd=d;best=v;}});
+    e.ld.setAttribute('points',`${ex},${ey} ${best[0]},${best[1]}`);
+    e.hx.setAttribute('points',hv.map(v=>v.join(',')).join(' '));
+    [e.br,e.ld,e.hx].forEach(l=>l.style.strokeWidth=(1*s)+'');
+    setDraw(e.br,ease(clamp01(p*2.2)));setDraw(e.ld,ease(clamp01(p*2-.5)));setDraw(e.hx,ease(clamp01(p*2.5-1.2)));
+    // refresh the numbers once a second
+    const now=performance.now();
+    if(!se.strT||now-se.strT>1000){se.str=(se.div*24).toFixed(3)+' ARC DEGREES';se.strT=now;}
+    const put=(el,yy,px,w,fill)=>{el.setAttribute('x',x+7*s);el.setAttribute('y',yy);el.style.fontSize=px*s+'px';el.style.fontWeight=w;if(fill)el.style.fill=fill;};
+    put(e.tt,y+3*s,13,400);e.b.textContent=typedP('DIVERGENCE: ',p*2.5-.2);e.n.textContent=typedP(se.name,p*2.5-.6);
+    put(e.l2,y+13*s,8,400,'#444');e.l2.textContent=typedP(se.str,p*2.5-.9);
+    put(e.l3,y+21.5*s,8,400,'#666');e.l3.textContent=typedP('FOCAL POINT: '+se.place,p*2.5-1.1);
+  });
+}
+
+// header (top-left, as in the reference frame)
+let headName='',headP=0;
+function header(D,top,dt){
+  const s=Math.max(.75,H/525),L=25*s;
+  $('hbr').setAttribute('d',`M${L},${42*s} L${L},${94*s} L${L+8*s},${104*s} L${285*s},${104*s} L${296*s},${94*s}`);
+  $('hbr').style.strokeWidth=(1.1*s)+'';setDraw($('hbr'),1);
+  const d=new Date(),pad=n=>String(n).padStart(2,'0');
+  const T=(id,x,y,px,w,fill,str)=>{const e=$(id);e.setAttribute('x',x);e.setAttribute('y',y);
+    e.style.fontSize=px*s+'px';e.style.fontWeight=w;if(fill)e.style.fill=fill;e.textContent=str;};
+  T('hdt',41*s,57*s,17,600,'#222',`${pad(d.getMonth()+1)}.${pad(d.getDate())}.${String(d.getFullYear()).slice(2)}  ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`);
+  const name=D>.15&&top?top.name:'NOMINAL';
+  if(name!==headName){headName=name;headP=SNAP?1:0;}
+  headP=Math.min(1,headP+dt*1.4);
+  $('hdv').setAttribute('x',41*s);$('hdv').setAttribute('y',83*s);$('hdv').style.fontSize=26*s+'px';
+  $('hdv1').style.fontWeight=600;$('hdv2').style.fontWeight=300;
+  $('hdv1').textContent='DIVERGENCE';
+  $('hdv2').textContent=' : '+typedP(name,headP);
+  const st=D>.7?'CRITICAL EVENT':D>.35?'ELEVATED SCRUTINY':'STABLE';
+  T('hce',41*s,98*s,10.5,400,D>.7?'#555':'#b5b5b5',st);
+}
+
+/* ---------- main loop ---------- */
+let hScale=1,focusH=.05,lastRz=0,D=0,Dv=0,massX=-1,massY=0,last=performance.now();
+const T0=performance.now();
+const MAXF=+Q.get('frames')||0;let nF=0;
+const P={uThick:.0072,uOff:0,uWob:.22,uScal:.0017,uDust:0,uFringe:0,uMass:0,uTone:.13,uGrain:.3,uZ:.02,uInv:invT,paper:.915};
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  const t=FIXED_T!==null?FIXED_T:(now-T0)/1000;
+  simulate(now,dt);
+
+  // sensors: spring-damped spike heights (u units)
+  let mx=0,sum=0,vx=0,vy=0,top=null;
+  SENSORS.forEach(s=>{
+    s.div+=(s.target-s.div)*Math.min(1,dt*3);if(SNAP)s.div=s.target;
+    const ht=Math.max(0,s.div-.05)*.15, k=42, c=7.5;
+    s.v+=(k*(ht-s.h)-c*s.v)*dt;s.h+=s.v*dt;if(SNAP){s.h=ht;s.v=0;}
+    if(s.div>mx){mx=s.div;top=s;}sum+=s.div;
+    vx+=Math.cos(s.a)*s.div*s.div;vy+=Math.sin(s.a)*s.div*s.div;
+  });
+  // global divergence: driven by how much of the house diverges, not by one sensor
+  const Dt=clamp01(1.7*sum/SENSORS.length+.1*mx);
+  Dv+=(42*(Dt-D)*.25-6*Dv)*dt;D+=Dv*dt;D=clamp01(D);if(SNAP)D=Dt;
+
+  // the crescent gathers on the side of the strongest disturbance
+  if(Math.hypot(vx,vy)>.02){const l=Math.hypot(vx,vy);
+    massX+=(vx/l-massX)*Math.min(1,dt*.8);massY+=(vy/l-massY)*Math.min(1,dt*.8);
+    if(SNAP){massX=vx/l;massY=vy/l;}}
+  const massAng=Math.atan2(massY,massX);
+
+  // divergence -> shape parameters
+  const tg={
+    uThick:.0072+.012*D,
+    uOff:.035*smooth(.2,.6,D)*(1-.5*smooth(.6,1,D)),
+    uWob:.22+.6*D,
+    uScal:.0017*(1-D)+.0006,
+    uDust:.25*smooth(.5,1,D),
+    uFringe:.25*smooth(.4,1,D),
+    uMass:smooth(.35,1,D),
+    uTone:.13+(.03-.13)*smooth(0,.5,D),
+    uGrain:.3*(1-D),
+    uZ:.02+.05*D,
+    uInv:invT,
+    paper:.915+(.76-.915)*smooth(.5,1,D),
+  };
+  for(const n in tg)P[n]+=(tg[n]-P[n])*(SNAP?1:Math.min(1,dt*3));
+  for(const n in tg)if(U[n])U[n].value=P[n];
+  U.uT.value=t;
+  U.uOffAng.value=massAng+Math.PI;   // inner disc slides away -> black mass on the disturbed side
+  U.uFrAng.value=massAng;
+  SENSORS.forEach((s,i)=>U.uSp.value[i].set(s.a,s.h,s.w,0));
+  { // tower dots are shared out in proportion to spike height
+    const wts=U.uSp.value.map(v=>Math.max(0,v.y));const tot=wts.reduce((a,b)=>a+b,0);
+    const cap=Math.max(tot,1.);          // unused share = idle (invisible) dots
+    let acc=0;for(let i=0;i<NSP;i++){acc+=tot>1e-4?wts[i]/cap:0;U.uCdf.value[i]=acc;}
+  }
+
+  // background paper (inverted at night)
+  const pv=P.paper;
+  const fade=SNAP||FIXED_T!==null?1:ease(clamp01((now-T0)/2600));   // the ring appears out of black, as in the show
+  const pc=Math.round((.035+((pv+(1-2*pv)*P.uInv)-.035)*fade)*255);
+  renderer.setClearColor(new THREE.Color(`rgb(${pc},${pc},${Math.max(0,pc-4)})`));
+  document.body.style.background=`rgb(${pc},${pc},${pc})`;
+
+  // focus: rotate the disc so the sensor's spike points up, dolly the camera in
+  if(focusId&&now>focusUntil)focusId=null;
+  const fs=focusId?byId[focusId]:null;
+  focusK+=((fs?1:0)-focusK)*(SNAP?1:Math.min(1,dt*1.1));
+  if(fs){let rz=Math.PI/2-fs.a;rz=Math.atan2(Math.sin(rz),Math.cos(rz));lastRz=rz;}
+  const fe=ease(clamp01(focusK));
+  U.uSpikeFill.value=.7*(1-fe);
+  mesh.rotation.z=lastRz*fe;
+  const camZ=(.5/RING_SCREEN)/Math.tan(15*Math.PI/180);
+  if(fs)focusH=fs.h*.45;
+  const vis=Math.max(.5,2.*focusH/.4);             // visible height (world), from the BEIHAI arc sag
+  const fz=Math.min(2.6,Math.max(.6,vis/2/Math.tan(15*Math.PI/180)));
+  const fy=.97+.07*vis;            // band centre (just inside Rb) sits at 57% from the top
+  camera.position.set(0,fy*fe,camZ+(fz-camZ)*fe);
+  camera.lookAt(0,fy*fe,0);
+  hScale=1-.55*fe;U.uSp.value.forEach(v=>{v.y*=hScale;v.z*=1-.5*fe;});   // close-up keeps the tower ~1/4 of the frame
+  U.uFocus.value=fe;U.uFocusAng.value=fs?fs.a:U.uFocusAng.value;
+  PU.uPx.value=renderer.getPixelRatio()*H/676*camZ;
+
+  // volumetric sway + drag tilt (springs back when released)
+  if(!drag){dragYaw*=1-Math.min(1,dt*1.5);dragPitch*=1-Math.min(1,dt*1.5);}
+  const sway=Q.has('sway')?+Q.get('sway'):1;
+  mesh.rotation.y=(Q.has('yaw')?+Q.get('yaw'):.12*Math.sin(t*.11)*sway*(1-.7*fe))+dragYaw;
+  mesh.rotation.x=(Q.has('pitch')?+Q.get('pitch'):.07*Math.sin(t*.07+1)*sway)+dragPitch;
+  mesh.updateMatrixWorld();
+
+  renderer.render(scene,camera);
+  $('hud').style.filter=`invert(${P.uInv})`;
+  $('hud').style.opacity=clamp01(fade*1.6-.6);
+  header(D,top,dt);
+  layoutCallouts(dt);
+  if(MAXF&&++nF>=MAXF)return;   // test hook: stop after N frames
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

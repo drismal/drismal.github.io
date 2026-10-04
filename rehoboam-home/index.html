@@ -5,43 +5,54 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <meta name="theme-color" content="#000000">
 <title>Rehoboam Home</title>
+<link rel="stylesheet" href="fonts/fonts.css">
 <style>
   html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:manipulation;-webkit-user-select:none;user-select:none}
   canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
-  #hud{position:fixed;inset:0;pointer-events:none;color:#111;
-       font-family:"Barlow Condensed","Bebas Neue","DIN Condensed","Arial Narrow",Impact,sans-serif;
-       transition:opacity .8s}
-  .lbl{position:absolute;white-space:nowrap;letter-spacing:.02em;line-height:1.05}
-  .lbl b{font-weight:600;font-size:clamp(18px,3.2vmin,34px)}
+  #hud,#lblwrap{position:fixed;inset:0;pointer-events:none;
+       font-family:"RC","Roboto Condensed","Arial Narrow",sans-serif}
+  svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+  svg .ln{fill:none;stroke:#2b2b2b;stroke-linejoin:miter;stroke-linecap:butt}
+  svg text{fill:#1d1d1d;letter-spacing:.02em}
+  .lbl{position:absolute;white-space:nowrap;letter-spacing:.02em;line-height:1.05;color:#111}
+  .lbl b{font-weight:700;font-size:clamp(18px,3.2vmin,34px)}
   .lbl span{font-weight:300;font-size:clamp(18px,3.2vmin,34px)}
   .lbl i{display:block;font-style:normal;font-weight:400;font-size:clamp(9px,1.5vmin,15px);color:#555;letter-spacing:.06em}
-  svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
-  svg *{fill:none;stroke:#222;stroke-width:1;vector-effect:non-scaling-stroke}
 </style>
 </head>
 <body>
 <canvas id="gl"></canvas>
+
+<!-- reference-style callout (scene 0) -->
 <div id="hud">
-  <svg id="svg"><polyline id="leader"/><polygon id="hex"/><circle id="hexdot" r="2"/></svg>
-  <div class="lbl" id="lbl"><b id="l1"></b><span id="l1b"></span><i id="l2"></i><i id="l3"></i></div>
+<svg id="svg">
+  <path   id="br" class="ln" pathLength="1"/>
+  <polyline id="ld" class="ln" pathLength="1"/>
+  <polygon id="hx" class="ln" pathLength="1"/>
+  <circle id="hd" r="1.6" fill="#222"/>
+  <text id="dt"></text>
+  <text id="dv"><tspan id="dv1"></tspan><tspan id="dv2"></tspan></text>
+  <text id="ce"></text>
+  <text id="t1"></text><text id="t2"></text>
+</svg>
 </div>
+
+<!-- simple label (other scenes) -->
+<div id="lblwrap"><div class="lbl" id="lbl"><b id="l1"></b><span id="l1b"></span><i id="l2"></i><i id="l3"></i></div></div>
+
 <script>
 "use strict";
-// ---------- shader ----------
+/* =====================================================================
+   SHADER: every pixel is computed from formulas — no video, no textures.
+   Units: lengths are fractions of screen HEIGHT; q = frag/H, p = q - centre.
+   ===================================================================== */
 const VS = `attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}`;
 const FS = `
 precision highp float;
-uniform vec2  uRes;
-uniform float uT;
-uniform float uBg;      // 0 black .. 1 light paper
-uniform float uThick;   // base ring thickness (fraction of height)
-uniform float uOff;     // inner-disc offset -> crescent
-uniform float uOffAng;  // direction of the offset
-uniform float uWob;     // edge wobble amplitude
-uniform float uSpike;   // spike amplitude
-uniform float uDust;    // ink dust density
-uniform float uMass;    // 0 ring .. 1 swelling black mass
-uniform float uRad;     // ring radius
+uniform vec2  uRes, uC;      // resolution (px), ring centre (H-units)
+uniform float uT, uPaper, uTone, uThick, uOff, uOffAng, uWob, uScal, uSpike, uDust, uGrain, uMass, uRad;
+uniform float uDark;         // 0 black screen .. 1 shown
+uniform float uStreak, uSA, uSB;   // ink streak progress, start x, end x (H-units)
 
 const float PI = 3.14159265;
 float hash(vec3 p){p=fract(p*.3183099+.1);p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
@@ -52,71 +63,94 @@ float noise(vec3 x){
              mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+vec3(1,1,1)),f.x),f.y),f.z);
 }
 float fbm(vec3 p){float s=0.,a=.5;for(int i=0;i<5;i++){s+=a*noise(p);p*=2.03;a*=.5;}return s;}
+float angd(float a,float b){return abs(mod(a-b+PI,2.*PI)-PI);}
 
 void main(){
-  vec2 p=(gl_FragCoord.xy-.5*uRes)/min(uRes.x,uRes.y);
+  vec2 q=gl_FragCoord.xy/uRes.y;
+  vec2 p=q-uC;
   float r=length(p);
   float a=atan(p.y,p.x);
   vec2 dir=p/max(r,1e-4);
 
-  // --- outer edge: low-freq breathing + high-freq ink roughness ---
+  // ---- edge: perfect circle + regular scallops + slow ink wander ----
   float n1=fbm(vec3(dir*2.2,uT*.22));
   float n2=fbm(vec3(dir*11.,uT*.55));
   float n3=noise(vec3(dir*38.,uT*1.4));
   float Rb=uRad + uWob*(n1-.5)*.06;
-  float Ro=Rb + uWob*((n2-.5)*.02+(n3-.5)*.006);
+  // scallops: ~34 evenly spaced bumps, phase slowly drifting, amplitude breathing
+  float ph=a*30.+ (n1-.5)*2.2 + uT*.15;
+  float scal=uScal*(sin(ph)*.7+sin(ph*.5+1.3)*.3)*(.75+.5*noise(vec3(dir*5.,uT*.3)));
+  float Ro=Rb + scal + uWob*((n2-.5)*.02+(n3-.5)*.006);
 
-  // --- spikes (thin bristles that drift around the rim) ---
+  // spikes
   for(int i=0;i<10;i++){
     float fi=float(i);
     float ai=fi*0.63+sin(fi*12.9898)*2.2+uT*(0.02+0.01*sin(fi*7.));
-    float d=abs(mod(a-ai+PI,2.*PI)-PI);
+    float d=angd(a,ai);
     float h=(.012+.05*fract(sin(fi*91.7)*43758.5))*uSpike*(.55+.45*sin(uT*.6+fi*3.1));
     float w=.012+.02*fract(sin(fi*37.1)*917.3);
     Ro+=h*pow(max(0.,1.-d/w),2.5);
   }
+  // where the streak lands the rim is pulled outward
+  float dl=angd(a,PI);
+  Ro+=uStreak*.006*exp(-pow(dl/.05,2.))*(.6+.8*noise(vec3(a*30.,0.,uT)));
 
-  // --- swelling black mass (scene C): radius grows and blurs ---
-  float soft=.0035+uMass*.05;
+  // swelling mass
+  float soft=.0022+uMass*.05;
   Ro+=uMass*(.05+.07*fbm(vec3(dir*3.,uT*.3)));
-
   float outer=1.-smoothstep(Ro-soft,Ro+soft,r);
 
-  // --- inner white disc, offset -> crescent ---
+  // inner disc (offset -> crescent) ; ring thickness wanders along the rim
   vec2 c=vec2(cos(uOffAng),sin(uOffAng))*uOff;
-  float Ri=Rb-uThick+(n2-.5)*.004*uWob;
+  float th=uThick*(.65+.7*noise(vec3(dir*14.,uT*.2)));
+  float Ri=Rb-th+scal*.6+(n2-.5)*.004*uWob;
   float di=length(p-c);
-  float innerSoft=.0018+uMass*.06;
+  float innerSoft=.0014+uMass*.06;
   float inner=1.-smoothstep(Ri-innerSoft,Ri+innerSoft,di);
   float ink=outer*(1.-inner);
 
-  // --- ink bleed haze + dust outside the rim ---
+  // ink bleed + dust
   float out_=max(r-Ro,0.);
   float rim=smoothstep(Ro-.003,Ro+.003,r);
   float haze=rim*exp(-out_/.018)*smoothstep(.42,.75,n2)*.55*uWob;
   float dustD=rim*exp(-out_/.04)*uDust*smoothstep(.35,.7,n1);
-  vec2 g=floor(gl_FragCoord.xy/2.);
-  float spec=step(1.-dustD*.5,hash2(g));
-  // inner bleed (soft smoke just inside the black on the thick side)
-  float ib=exp(-max(Ri-di,0.)/.02)*(1.-inner*0.)*smoothstep(.4,.8,n2)*.35;
-  float inSide=(1.-smoothstep(Ri-.02,Ri,di));
-  float a_ink=clamp(ink+haze*(1.-ink)+spec*(1.-inner)+ib*inSide*outer*.0,0.,1.);
+  float spec=step(1.-dustD*.5,hash2(floor(gl_FragCoord.xy/2.)));
+  float a_ink=clamp(ink+haze*(1.-ink)+spec*(1.-inner),0.,1.);
 
-  // --- paper ---
-  vec3 paper=vec3(.915,.918,.90);
-  vec3 white=vec3(.955,.957,.945);
-  float vig=1.-.08*smoothstep(.3,1.,length(p));
-  vec3 bg=mix(vec3(.04),paper*vig,uBg);
-  vec3 disc=mix(vec3(.05),white*vig,uBg);
+  // grainy ink texture on thin ring
+  a_ink*=1.-uGrain*.55*hash2(floor(gl_FragCoord.xy*.8)+floor(uT*6.));
+
+  // ---- horizontal ink streak from the hexagon to the ring ----
+  float streak=0.;
+  if(uStreak>0.){
+    float t=(q.x-uSA)/(uSB-uSA);
+    if(t>0.&&t<1.){
+      float reach=smoothstep(uStreak,uStreak-.14,t);
+      float jit=(noise(vec3(q.x*40.,0.,uT*.5))-.5)*.0035+(noise(vec3(q.x*9.,3.,uT*.2))-.5)*.004;
+      float w=(.0021+.0048*t*t)*(.6+.8*noise(vec3(q.x*70.,1.,uT*.8)));
+      float d=abs(q.y-uC.y-jit);
+      float core=1.-smoothstep(w*.55,w,d);
+      float blot=smoothstep(.6,.82,noise(vec3(q.x*55.,q.y*170.,uT*.3)))*(1.-smoothstep(w*1.3,w*3.6,d))*t*1.3;
+      streak=(core*(.55+.45*t)+blot)*reach;
+    }
+  }
+  a_ink=clamp(a_ink+streak*(1.-a_ink),0.,1.);
+
+  // ---- paper ----
+  vec3 paper=vec3(uPaper,uPaper+.003,uPaper-.015);
+  vec3 white=paper+.035;
+  float vig=1.-.06*smoothstep(.35,1.,length(q-.5*vec2(uRes.x/uRes.y,1.)));
+  vec3 bg=mix(vec3(.03),paper*vig,uDark);
+  vec3 disc=mix(vec3(.04),white*vig,uDark);
   vec3 col=mix(bg,disc,inner*outer);
-  vec3 inkc=vec3(.035)+.03*n2;
+  vec3 inkc=vec3(uTone)+.03*n2;
+  inkc=mix(inkc,vec3(.04),clamp(streak*1.2,0.,1.));
   col=mix(col,inkc,a_ink);
-  // film grain
-  col+=(hash2(gl_FragCoord.xy+fract(uT)*100.)-.5)*.018;
+  col+=(hash2(gl_FragCoord.xy+fract(uT)*100.)-.5)*.014;
   gl_FragColor=vec4(col,1.);
 }`;
 
-// ---------- gl setup ----------
+/* ---------- gl setup ---------- */
 const cv=document.getElementById('gl');
 const gl=cv.getContext('webgl',{antialias:false,preserveDrawingBuffer:true})||cv.getContext('experimental-webgl');
 function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);
@@ -126,74 +160,120 @@ gl.linkProgram(pr);gl.useProgram(pr);
 const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
 gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
 const loc=gl.getAttribLocation(pr,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
-const U={};['uRes','uT','uBg','uThick','uOff','uOffAng','uWob','uSpike','uDust','uMass','uRad'].forEach(n=>U[n]=gl.getUniformLocation(pr,n));
-
-let DPR=Math.min(window.devicePixelRatio||1,1.5);
-function resize(){cv.width=Math.round(innerWidth*DPR);cv.height=Math.round(innerHeight*DPR);gl.viewport(0,0,cv.width,cv.height);}
+const UN=['uRes','uC','uT','uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak','uSA','uSB'];
+const U={};UN.forEach(n=>U[n]=gl.getUniformLocation(pr,n));
+let DPR=Math.min(window.devicePixelRatio||1,1.5),W=innerWidth,H=innerHeight;
+function resize(){W=innerWidth;H=innerHeight;cv.width=Math.round(W*DPR);cv.height=Math.round(H*DPR);gl.viewport(0,0,cv.width,cv.height);
+  const s=document.getElementById('svg');s.setAttribute('viewBox',`0 0 ${W} ${H}`);}
 addEventListener('resize',resize);resize();
 
-// ---------- scenes (parameters measured from the reference clips) ----------
+/* ---------- scenes ----------
+   cx,cy = ring centre as fraction of width/height (reference frame: .636 / .508) */
 const SCENES=[
- { name:'ring',    // clips 1-2: thin black ring, rippling edge, a few bristles
-   p:{uBg:1,uThick:.011,uOff:0,uOffAng:0,uWob:1,uSpike:.6,uDust:.25,uMass:0,uRad:.40},
-   lbl:{l1:'ELEVATED SCRUTINY: ',l1b:'ГОСТИНАЯ',l2:'SPECIAL CIRCUMSTANCES',l3:'LOCATION: 41.2995°N, 69.2401°E',
-        pos:{left:'3.5vw',top:'4vh'}, hex:null, dur:7},
- },
- { name:'crescent',// clip 3: white disc shifted right -> thick black crescent on the left
-   p:{uBg:1,uThick:.012,uOff:.042,uOffAng:.12,uWob:1.2,uSpike:1,uDust:.55,uMass:0,uRad:.42},
-   lbl:{l1:'DIVERGENCE: ',l1b:'КУХНЯ',l2:'2.39 ARC SECONDS',l3:'FOCAL POINT: ДАТЧИК ДВЕРИ',
-        pos:{right:'3.5vw',bottom:'5vh'}, hex:null, dur:7},
- },
- { name:'mass',    // clip 4 (screenshot 3): ring swells into a blurred black mass
-   p:{uBg:.9,uThick:.05,uOff:.05,uOffAng:.5,uWob:1.4,uSpike:1.1,uDust:.8,uMass:.6,uRad:.36},
-   lbl:{l1:'DIVERGENCE: ',l1b:'ТРЕВОГА',l2:'ALL SENSORS',l3:'FOCAL POINT: 21.4813°N, 109.1202°E',
-        pos:{left:'3.5vw',top:'4vh'}, hex:null, dur:7},
- },
+ { // reference: perfectly round thin ring, callout -> hexagon -> ink streak into the ring
+   p:{cx:.636,cy:.508,uPaper:.985,uTone:.13,uThick:.0072,uOff:0,uOffAng:0,uWob:.22,uScal:.0017,uSpike:0,uDust:0,uGrain:.3,uMass:0,uRad:.387},
+   ref:true, dur:12 },
+ { // crescent (clip 3)
+   p:{cx:.5,cy:.5,uPaper:.915,uTone:.035,uThick:.012,uOff:.042,uOffAng:.12,uWob:1.2,uScal:0,uSpike:1,uDust:.55,uGrain:0,uMass:0,uRad:.42},
+   lbl:{l1:'DIVERGENCE: ',l1b:'КУХНЯ',l2:'2.39 ARC SECONDS',l3:'FOCAL POINT: ДАТЧИК ДВЕРИ',pos:{right:'3.5vw',bottom:'5vh'}}, dur:7 },
+ { // swelling mass
+   p:{cx:.5,cy:.5,uPaper:.82,uTone:.035,uThick:.05,uOff:.05,uOffAng:.5,uWob:1.4,uScal:0,uSpike:1.1,uDust:.8,uGrain:0,uMass:.6,uRad:.36},
+   lbl:{l1:'DIVERGENCE: ',l1b:'ТРЕВОГА',l2:'ALL SENSORS',l3:'FOCAL POINT: 21.4813°N, 109.1202°E',pos:{left:'3.5vw',top:'4vh'}}, dur:7 },
 ];
-const q=new URLSearchParams(location.search);
-let cur=+q.get('scene')||0, tScene=0;
-const P={...SCENES[cur].p}, T0=performance.now();
-const fixedT=q.has('t')?+q.get('t'):null;
+const Q=new URLSearchParams(location.search);
+let cur=+Q.get('scene')||0, tScene=performance.now();
+const P={...SCENES[cur].p,uDark:0,uStreak:0};
+const T0=performance.now();
+const fixedT=Q.has('t')?+Q.get('t'):null;
+const fixedS=Q.has('ts')?+Q.get('ts'):null;   // scene-local time for screenshots
 
-function setLabel(s){
-  const L=s.lbl,el=document.getElementById('lbl');
+const $=id=>document.getElementById(id);
+const ease=x=>x*x*(3-2*x), clamp01=x=>Math.max(0,Math.min(1,x));
+const seg=(t,a,b)=>clamp01((t-a)/(b-a));
+const typed=(s,t,a,b)=>s.slice(0,Math.round(s.length*seg(t,a,b)));
+
+function setLabel(){
+  const s=SCENES[cur],el=$('lbl');
   el.style.left=el.style.right=el.style.top=el.style.bottom='auto';
-  Object.assign(el.style,L.pos);
-  el.style.textAlign=L.pos.right?'right':'left';
-  L.t0=performance.now();
+  if(s.lbl)Object.assign(el.style,s.lbl.pos);
+  el.style.textAlign=s.lbl&&s.lbl.pos.right?'right':'left';
 }
-function typeLabel(now){
-  const L=SCENES[cur].lbl, k=Math.floor((now-L.t0-500)/38); // typewriter
-  const cut=(s,off)=>s.slice(0,Math.max(0,Math.min(s.length,k-off)));
-  const a=L.l1.length,b=a+L.l1b.length,c=b+L.l2.length;
-  document.getElementById('l1').textContent=cut(L.l1,0);
-  document.getElementById('l1b').textContent=cut(L.l1b,a);
-  document.getElementById('l2').textContent=cut(L.l2,b);
-  document.getElementById('l3').textContent=cut(L.l3,c);
-}
-function go(i){cur=(i+SCENES.length)%SCENES.length;tScene=performance.now();setLabel(SCENES[cur]);}
+function go(i){cur=(i+SCENES.length)%SCENES.length;tScene=performance.now();setLabel();}
 addEventListener('pointerdown',()=>go(cur+1));
 addEventListener('keydown',e=>{if(e.key>='1'&&e.key<='9')go(+e.key-1);});
-setLabel(SCENES[cur]);tScene=performance.now();
+setLabel();
 
-const ease=(x)=>x*x*(3-2*x);
+/* ---------- reference callout (scene 0) ----------
+   Coordinates come from the 700x525 reference frame, scaled by s = H/525. */
+const HEXR=18;
+function hexPts(x,y,r){let o=[];for(let k=0;k<6;k++){const a=(-90+60*k)*Math.PI/180;o.push([x+r*Math.cos(a),y+r*Math.sin(a)]);}return o;}
+function setDraw(el,k){el.style.strokeDasharray='1 1.001';el.style.strokeDashoffset=String(1-k);el.style.opacity=k>0?1:0;}
+function callout(t){
+  const s=H/525, cx=P.cx*W, cy=P.cy*H, R=P.uRad*H;
+  const hx=.183*W, hy=cy, hr=HEXR*s;
+  const L=25*s;
+  // bracket frame with chamfered corner
+  $('br').setAttribute('d',`M${L},${42*s} L${L},${94*s} L${L+8*s},${104*s} L${285*s},${104*s} L${296*s},${94*s}`);
+  const hv=hexPts(hx,hy,hr);
+  // leader goes from the frame's lower-left corner to the hexagon's upper-left vertex
+  $('ld').setAttribute('points',`${L+8*s},${104*s} ${hv[5][0]},${hv[5][1]}`);
+  $('hx').setAttribute('points',hv.map(v=>v.join(',')).join(' '));
+  $('hd').setAttribute('cx',hx);$('hd').setAttribute('cy',hy);
+  $('svg').querySelectorAll('.ln').forEach(e=>e.style.strokeWidth=(1.1*s)+'');
+  setDraw($('br'),ease(seg(t,.6,1.8)));
+  setDraw($('ld'),ease(seg(t,1.4,2.8)));
+  setDraw($('hx'),ease(seg(t,2.6,3.3)));
+  $('hd').style.opacity=seg(t,3.1,3.4);
+
+  const fs=(px,w)=>({'font-size':px*s,'font-weight':w});
+  const T=(id,x,y,px,w,fill,str)=>{const e=$(id);e.setAttribute('x',x);e.setAttribute('y',y);
+    e.style.fontSize=px*s+'px';e.style.fontWeight=w;if(fill)e.style.fill=fill;e.textContent=str;};
+  T('dt',41*s,57*s,17,700,'#222',typed('02.27.58',t,1.0,1.7));
+  const e=$('dv');e.setAttribute('x',41*s);e.setAttribute('y',83*s);e.style.fontSize=26*s+'px';
+  $('dv1').style.fontWeight=700;$('dv2').style.fontWeight=300;
+  $('dv1').textContent=typed('DIVERGENCE',t,1.3,2.2);
+  $('dv2').textContent=typed(' : UNKNOWN LOCATION',t,2.2,3.4);
+  T('ce',41*s,98*s,10.5,400,'#b5b5b5',typed('CRITICAL EVENT',t,2.0,2.9));
+  // tiny captions beside the streak
+  const sx=hx+hr+10*s;
+  T('t1',sx+8*s,hy-9*s,6.5,400,'#777',typed('R.H-0227 / SECTOR 03',t,3.4,4.2));
+  T('t2',sx+22*s,hy+15*s,6.5,400,'#777',typed('Δ 0.0041  Σ 118',t,3.6,4.4));
+  // streak geometry for the shader (H-units)
+  return {sa:(hx+hr)/H, sb:(cx-R)/H, cy:1-cy/H, cxH:cx/H, streak:ease(seg(t,3.3,6.4))};
+}
+
+/* ---------- main loop ---------- */
 function frame(now){
   const t=fixedT!==null?fixedT:(now-T0)/1000;
-  // auto-advance
-  if(fixedT===null && (now-tScene)/1000>SCENES[cur].lbl.dur) go(cur+1);
-  // smooth parameter blending toward the target scene
-  const tg=SCENES[cur].p, k=fixedT!==null?1:.035;
-  for(const n in tg)P[n]+= (tg[n]-P[n])*k;
-  // fade in from black when a scene starts
-  const since=(now-tScene)/1000;
-  const fade=fixedT!==null?1:ease(Math.min(1,since/1.2));
+  const since=fixedS!==null?fixedS:(now-tScene)/1000;
+  if(fixedT===null&&fixedS===null&&since>SCENES[cur].dur)go(cur+1);
+  const sc=SCENES[cur], tg=sc.p, k=(fixedS!==null)?1:.04;
+  for(const n in tg)P[n]+=(tg[n]-P[n])*k;
+  const fade=fixedS!==null?1:ease(Math.min(1,since/1.2));
+  P.uDark=fade;
+
+  let sa=0,sb=1,cyH=0,cxH=0;
+  const hud=$('hud'),lw=$('lblwrap');
+  if(sc.ref){
+    const g=callout(since); sa=g.sa;sb=g.sb;P.uStreak=g.streak;
+    hud.style.opacity=1;lw.style.opacity=0;
+  }else{
+    P.uStreak+=(0-P.uStreak)*.08;
+    hud.style.opacity=0;lw.style.opacity=fade;
+    const L=sc.lbl,kk=Math.floor((since-.5)*26);
+    const cut=(s,o)=>s.slice(0,Math.max(0,Math.min(s.length,kk-o)));
+    const a=L.l1.length,b=a+L.l1b.length,c=b+L.l2.length;
+    $('l1').textContent=cut(L.l1,0);$('l1b').textContent=cut(L.l1b,a);
+    $('l2').textContent=cut(L.l2,b);$('l3').textContent=cut(L.l3,c);
+  }
+  cyH=1-P.cy; cxH=P.cx*W/H;
   gl.uniform2f(U.uRes,cv.width,cv.height);
+  gl.uniform2f(U.uC,cxH,cyH);
   gl.uniform1f(U.uT,t);
-  gl.uniform1f(U.uBg,P.uBg*fade);
-  for(const n in P)if(n!=='uBg')gl.uniform1f(U[n],P[n]);
+  gl.uniform1f(U.uSA,sc.ref?sa:0);gl.uniform1f(U.uSB,sc.ref?sb:1);
+  for(const n of ['uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak'])
+    gl.uniform1f(U[n],P[n]);
   gl.drawArrays(gl.TRIANGLES,0,3);
-  typeLabel(now);
-  document.getElementById('hud').style.opacity=fade;
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

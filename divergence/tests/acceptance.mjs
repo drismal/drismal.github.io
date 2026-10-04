@@ -83,7 +83,7 @@ await shot('1_rest_plus5s');
 // 3–4. level 2 at 315° (upper right): ridges, spike, marker, callout outside the ring
 const sector = [(-45 - 20) * Math.PI / 180, (-45) * Math.PI / 180, (-45 + 20) * Math.PI / 180];
 const opposite = sector.map((a) => a + Math.PI);
-const bandAt = async (ang) => (await radial(ang, 1.07, 1.13, 6)).reduce((s, p) => s + p[1], 0) / 7;
+const bandAt = async (ang) => (await radial(ang, 1.11, 1.17, 6)).reduce((s, p) => s + p[1], 0) / 7;
 // extra darkness of the event sector over the opposite sector, measured in the same frame
 const band = async () => (await bandAt(sector)) - (await bandAt(opposite));
 const ridgeBase = await band();
@@ -92,7 +92,7 @@ await wait(3500);
 await shot('3_level2');
 const ridgeOn = (await band()) - ridgeBase;
 let boxes = await calloutBoxes();
-check('level 2: ridges darken the sector', ridgeOn > 0.1, `extra darkness 1.07–1.13R = ${ridgeOn.toFixed(3)} (ring alone ${ridgeBase.toFixed(3)})`);
+check('level 2: ridges darken the sector', ridgeOn > 0.1, `extra darkness 1.11–1.17R = ${ridgeOn.toFixed(3)} (ring alone ${ridgeBase.toFixed(3)})`);
 check('callout text entirely outside the ring', boxes.length === 1 && boxes[0].distR > 1.2, boxes.map((b) => `dist ${b.distR.toFixed(2)} R`).join(', '));
 const tip = await page.evaluate(() => {
   const g = [...document.querySelectorAll('#callouts > g')].find((x) => x.style.display !== 'none');

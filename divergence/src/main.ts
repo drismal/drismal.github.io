@@ -11,7 +11,7 @@ import { HomeAssistant } from './data/HomeAssistant';
 import { Mqtt } from './data/Mqtt';
 import { Demo, SAMPLES } from './data/Demo';
 import type { Adapter, AdapterHooks } from './data/types';
-import { toggleDebug, type DebugApi } from './debug';
+import { Settings, loadSaved, type SettingsApi } from './settings/Settings';
 
 THREE.ColorManagement.enabled = false;   // colours are used as plain sRGB values in custom shaders
 const Q = new URLSearchParams(location.search);
@@ -19,11 +19,7 @@ const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 const TAU = Math.PI * 2;
 
 // colours (6.3): day / night; night is also 30 % dimmer
-const C = {
-  dayBg: new THREE.Color('#F9F9F9'), nightBg: new THREE.Color('#050505'),
-  dayInk: new THREE.Color('#111111'), nightInk: new THREE.Color('#EDEDED').multiplyScalar(0.7),
-  dayDot: new THREE.Color('#1a1a1a'),
-};
+const C = { dayBg: new THREE.Color(), nightBg: new THREE.Color(), dayInk: new THREE.Color(), nightInk: new THREE.Color() };
 const PAL_DAY: Palette = { line: '#999999', dot: '#333333', date: '#666666', key: '#111111', title: '#777777', body: '#444444' };
 const PAL_NIGHT: Palette = { line: '#888888', dot: '#cccccc', date: '#999999', key: '#ededed', title: '#999999', body: '#cccccc' };
 
@@ -36,6 +32,7 @@ function mixHex(a: string, b: string, t: number, k = 1): string {
 async function main() {
   const cfg = await loadConfig();
   const P = cfg.params;
+  loadSaved(P, cfg.strings);          // what the user set in the settings window on this device
   const stage = document.getElementById('stage')!;
   const svg = document.getElementById('callouts') as unknown as SVGSVGElement;
   const status = document.getElementById('status')!;
@@ -60,7 +57,7 @@ async function main() {
     W = innerWidth; H = innerHeight;
     renderer.setSize(W, H);
     camera.right = W; camera.bottom = H; camera.updateProjectionMatrix();
-    R0 = Math.min(0.30 * W, 0.40 * H);                 // section 2
+    R0 = Math.min(0.30 * W, 0.40 * H) * P.ringScale;   // section 2 (× user setting)
     callouts.resize(W, H);
   };
   addEventListener('resize', resize);
@@ -85,9 +82,11 @@ async function main() {
   } else if (adapterName === 'mqtt' && cfg.mqtt) {
     adapter = new Mqtt(cfg.mqtt.url, cfg.sensors, hooks, cfg.mqtt);
     hooks.onStatus(false);
-  } else if (adapterName === 'demo') {
-    adapter = new Demo(cfg.sensors, emit);
   }
+  // demo runs on its own (adapter "demo") or can be switched on from the settings window
+  const demo = new Demo(cfg.sensors, emit);
+  let demoOn = adapterName === 'demo';
+  if (demoOn) demo.start();
   adapter?.start();
   setInterval(() => engine.tick(), 5000);
 
@@ -103,15 +102,22 @@ async function main() {
   let manualNight: boolean | null = Q.has('night') ? Q.get('night') === '1' : null;
   let manualEclipse = false;
   const stats = { fps: 0, particles: 0 };
-  const debugApi: DebugApi = {
+  const settingsApi: SettingsApi = {
     params: P,
-    trigger: (l, a) => trigger(l, a),
+    strings: cfg.strings,
+    trigger: (l, a) => { trigger(l, a); },
     endAll: () => bus.endAll(),
-    toggleNight: () => { manualNight = !(manualNight ?? nightTarget()); },
-    toggleEclipse: () => { manualEclipse = !manualEclipse; },
+    nightMode: () => (manualNight === null ? 'auto' : manualNight ? 'night' : 'day'),
+    setNightMode: (m) => { manualNight = m === 'auto' ? null : m === 'night'; },
+    eclipse: () => manualEclipse,
+    setEclipse: (v) => { manualEclipse = v; },
+    demo: () => demoOn,
+    setDemo: (v) => { demoOn = v; if (v) demo.start(); else demo.stop(); },
     setParticles: (n) => { particles = clamp(n, 60000, POOL_MAX); adaptive = false; },
+    changed: (key) => { if (key === 'ringScale') resize(); },
     stats,
   };
+  const settings = new Settings(settingsApi);
   (window as unknown as Record<string, unknown>).divergence = {
     trigger, end: (id: string) => bus.end(id), endAll: () => bus.endAll(), clear: () => bus.clear(),
     bus, params: P, get state() { return { W, H, R, cx, cy, night, eclipse: ecl, particles, fps: stats.fps }; },
@@ -120,12 +126,12 @@ async function main() {
   addEventListener('keydown', (e) => {
     if (e.key >= '1' && e.key <= '3') trigger(+e.key as Level);
     else if (e.key === '0') bus.clear();
-    else if (e.key === 'n' || e.key === 'N' || e.key === 'т' || e.key === 'Т') debugApi.toggleNight();
-    else if (e.key === 'e' || e.key === 'E' || e.key === 'у' || e.key === 'У') debugApi.toggleEclipse();
+    else if (e.key === 'n' || e.key === 'N' || e.key === 'т' || e.key === 'Т') manualNight = !(manualNight ?? nightTarget());
+    else if (e.key === 'e' || e.key === 'E' || e.key === 'у' || e.key === 'У') manualEclipse = !manualEclipse;
   });
   let lastTap = 0;
-  addEventListener('pointerdown', () => { const t = performance.now(); if (t - lastTap < 350) toggleDebug(debugApi); lastTap = t; });
-  if (Q.get('debug') === '1') toggleDebug(debugApi);
+  addEventListener('pointerdown', () => { const t = performance.now(); if (t - lastTap < 350) settings.toggle(); lastTap = t; });
+  if (Q.get('settings') === '1' || Q.get('debug') === '1') settings.open();
 
   // ---- night (6.3) ----
   const hm = (s = '00:00') => { const [h, m] = s.split(':').map(Number); return h * 60 + (m || 0); };
@@ -159,7 +165,10 @@ async function main() {
     last = now;
     const t = (now - t0) / 1000;
     bus.tau = P.tau;
-    shape.heightScale = P.ridgeHeightScale;
+    if (shape.heightScale !== P.ridgeHeightScale) {          // live: reshape running events too
+      shape.heightScale = P.ridgeHeightScale;
+      for (const s of bus.slots) if (s.phase !== 'free') s.setLevel(s.ev.level, now, false);
+    }
     bus.update(now);
 
     // breathing and slow drift of the centre (2)
@@ -188,9 +197,10 @@ async function main() {
     night = nt > night ? Math.min(1, night + dt / 10) : Math.max(0, night - dt / 10);          // 10 s transition
 
     // colours
+    C.dayBg.set(P.dayBg); C.nightBg.set(P.nightBg); C.dayInk.set(P.dayInk); C.nightInk.set(P.nightInk);
     bg.copy(C.dayBg).lerp(C.nightBg, night);
     ink.copy(C.dayInk).lerp(C.nightInk, night);
-    dot.copy(C.dayDot).lerp(C.nightInk, night);
+    dot.copy(C.dayInk).lerp(C.nightInk, night);
     const k = 1 - 0.3 * night;
     (Object.keys(PAL_DAY) as (keyof Palette)[]).forEach((key) => { pal[key] = mixHex(PAL_DAY[key], PAL_NIGHT[key], night, k); });
     renderer.setClearColor(bg);
@@ -220,6 +230,7 @@ async function main() {
     if (Math.abs(shown - particles) > 1) { shown += (particles - shown) * Math.min(1, dt * 0.8); ridges.setCount(shown); }
 
     renderer.render(scene, camera);
+    callouts.textScale = P.textScale;
     callouts.update(now, dt, bus.slots, cx, cy, R, R0, W, H, jitPhase, maxRidge, pal);
 
     // status line: only after 5 s without connection

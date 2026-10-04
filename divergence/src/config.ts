@@ -59,6 +59,9 @@ export interface Params {
   breathPeriod: number;
   driftAmp: number;
   driftPeriod: number;
+  ringScale: number;          // × the radius of section 2
+  textScale: number;          // × callout text size
+  dayBg: string; dayInk: string; nightBg: string; nightInk: string;
 }
 
 export interface AppConfig {
@@ -93,6 +96,9 @@ export const DEFAULT_PARAMS: Params = {
   breathPeriod: 20,
   driftAmp: 0.008,
   driftPeriod: 90,
+  ringScale: 1,
+  textScale: 1,
+  dayBg: '#f9f9f9', dayInk: '#111111', nightBg: '#050505', nightInk: '#a6a6a6',
 };
 
 export const DEFAULT_STRINGS: Strings = {

@@ -147,6 +147,8 @@ class Callout {
 export class Callouts {
   private items: Callout[] = [];
   private placed: Rect[] = [];
+  /** user setting: × text size */
+  textScale = 1;
   private tip = { x: 0, y: 0 };
 
   constructor(private root: SVGSVGElement, private strings: Strings) {
@@ -203,7 +205,7 @@ export class Callouts {
       // a placement is valid when the block is on screen, outside the ring + ridges + clearance,
       // does not cover the marker, other blocks or their leaders
       const ok = (ch: Choice) => {
-        const g = this.geometry(c, A, ch.dy, ch.s, ch.v, ch.sc, R0, ch.slant);
+        const g = this.geometry(c, A, ch.dy, ch.s, ch.v, ch.sc * this.textScale, R0, ch.slant);
         if (g.r.x0 < mx || g.r.x1 > W - mx || g.r.y0 < my || g.r.y1 > H - my) return false;
         if (rectDist(g.r, cx0, cy0) < Rk * (1.03 + maxRidge * ch.ridge + ch.clear)) return false;
         // the leader must not cut across the ring or the ridges
@@ -225,9 +227,9 @@ export class Callouts {
       if (c.dy < 0 || best.v !== c.vdir || best.s !== c.side || best.slant !== c.slant) {
         c.dy = best.dy; c.vdir = best.v; c.side = best.s; c.sc = best.sc; c.slant = best.slant;
       } else { const k = Math.min(1, dt * 8); c.dy += (best.dy - c.dy) * k; c.sc += (best.sc - c.sc) * k; }
-      const g = this.geometry(c, A, c.dy, c.side, c.vdir, c.sc, R0, c.slant);
+      const g = this.geometry(c, A, c.dy, c.side, c.vdir, c.sc * this.textScale, R0, c.slant);
       this.placed.push(g.r);
-      this.draw(c, now, M, g, R0, c.sc, ro, pal);
+      this.draw(c, now, M, g, R0, c.sc * this.textScale, ro, pal);
     }
   }
 

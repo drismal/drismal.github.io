@@ -10,7 +10,6 @@
     "test": "node tests/acceptance.mjs"
   },
   "dependencies": {
-    "lil-gui": "^0.21.0",
     "mqtt": "^5.16.0",
     "three": "^0.186.1"
   },

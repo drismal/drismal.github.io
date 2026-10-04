@@ -47,8 +47,9 @@ export class Needles {
       else if (t < p.grow + p.life) k = 1;
       else if (t < p.grow + p.life + p.retract) k = 1 - (t - p.grow - p.life) / p.retract;
       else { p.on = false; v.set(0, 0, 0, 0); continue; }
-      const len = p.maxLen * (p.mini ? 1 : k);
-      const alpha = p.mini ? k : Math.min(1, k * 3);
+      const e = k * k * (3 - 2 * k);           // smooth in and out
+      const len = p.maxLen * (p.mini ? 0.6 + 0.4 * e : e);
+      const alpha = p.mini ? e : Math.min(1, e * 2);
       const base = 1.045 + ridgeHeight(p.theta, slots) * 0.75;   // needles stick out of the ridges
       v.set(p.theta, base, len, alpha);
     }

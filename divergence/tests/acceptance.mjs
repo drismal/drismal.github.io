@@ -22,7 +22,8 @@ const server = createServer(async (req, res) => {
   try { res.writeHead(200, { 'content-type': MIME[extname(p)] ?? 'application/octet-stream' }); res.end(await readFile(p)); }
   catch { res.writeHead(404); res.end(); }
 }).listen(0);
-const base = `http://127.0.0.1:${server.address().port}/index.html?adapter=none&test=1&dpr=1&particles=${process.env.PARTICLES ?? 60000}`;
+const root = `http://127.0.0.1:${server.address().port}/index.html?adapter=none&test=1&dpr=1&particles=${process.env.PARTICLES ?? 60000}`;
+const base = root + '&night=0';   // day unless a check asks for night (the schedule may say otherwise)
 
 const browser = await chromium.launch({ args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
@@ -136,7 +137,7 @@ check('4 callouts: no overlaps, on screen, outside ring', boxes.length === 4 && 
 
 // 8. night
 await page.evaluate(() => { window.divergence.setNight(true); });
-await page.goto(base + '&night=1');
+await page.goto(root + '&night=1');
 await wait(3000);
 await page.evaluate(() => window.divergence.trigger(2, 60, 0));
 await wait(3500);

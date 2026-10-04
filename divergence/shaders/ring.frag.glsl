@@ -30,7 +30,7 @@ void main(){
   float aa = 1.2 / uR;                  // ~1 px in R units
   float d = 0., innerDark = 0.;
 
-  if(x > .95 && x < 2.){
+  if(x > .97 && x < 1.62){
     // 3.3 outer edge: 6–7 petals + 13–17 ripple, boiling ~1 % R / s
     float n1 = (ringNT(th, 1.05, uBoil, 0.) - .5) * 2.2;
     float n2 = (ringNT(th, 2.4, uBoil*1.7, 13.) - .5) * 2.2;
@@ -39,7 +39,7 @@ void main(){
     float base = profile(max(rr, 1.0));
 
     // 3.2 double thread: the second thread drifts apart / crosses, 30 % lighter
-    float off = uThreadOff * (ringFT(th, 2., .05, 41.) - .5) * 3.2;
+    float off = uThreadOff * (ringNT(th, 2., .05, 41.) - .5) * 3.2;
     float w = uCoreW * uCore;
     float c1 = 1.03;
     float t1 = .92 * exp(-pow((x - c1) / w, 2.));
@@ -52,7 +52,7 @@ void main(){
 
     // 3.5 / 4.4 needles: thin dark cones growing from the outer edge
     float nd = 0.;
-    for(int i = 0; i < 24; i++){
+    if(x > 1.) for(int i = 0; i < 24; i++){
       vec4 n = uNeedle[i];
       if(n.w < .004) continue;
       float u = (x - n.y) / max(n.z, 1e-4);

@@ -8,10 +8,10 @@ import { MAX_SLOTS, type Slot } from '../events/EventBus';
 
 export const POOL_MAX = 250000;
 const SPIKE_SHARE = 0.12;
-// Particle density targets: shares are normalised by at least these capacities, so a
-// small event gets a proportional (not the whole) part of the pool.
-const RIDGE_CAP = 0.2;    // ≈ half of a level-3 sector (0.18 R × 2.27 rad)
-const SPIKE_CAP = 0.9;
+// Each of the 8 slots owns a fixed 1/8 of the pool. A slot shows weight / CAP of its
+// partition (clamped to 1): one level-3 sector fills it, smaller events show less.
+const RIDGE_CAP = 0.3;    // height × half-width (R·rad)
+const SPIKE_CAP = 0.45;   // spike length (R)
 
 export class Ridges {
   readonly points: THREE.Points;
@@ -24,8 +24,8 @@ export class Ridges {
     uJitPhase: { value: 0 },
     uEv: { value: Array.from({ length: MAX_SLOTS }, () => new THREE.Vector4()) },
     uEvS: { value: Array.from({ length: MAX_SLOTS }, () => new THREE.Vector4()) },
-    uCdfR: { value: new Array(MAX_SLOTS).fill(0) as number[] },
-    uCdfS: { value: new Array(MAX_SLOTS).fill(0) as number[] },
+    uShareR: { value: new Array(MAX_SLOTS).fill(0) as number[] },
+    uShareS: { value: new Array(MAX_SLOTS).fill(0) as number[] },
     uLayers: { value: 9 },
     uWaveFreq: { value: 7 },
     uWaveAmp: { value: 0.35 },
@@ -63,27 +63,18 @@ export class Ridges {
     this.geo.setDrawRange(0, Math.max(0, Math.min(POOL_MAX, Math.round(n))));
   }
 
-  /** Copy slot state into uniforms and recompute the particle shares (no allocations). */
+  /** Copy slot state into uniforms. Shares follow the (tweened) shape, never the boiling
+   *  energy, so the set of visible particles is stable from frame to frame. */
   sync(slots: Slot[]) {
-    let sumR = 0, sumS = 0;
     for (let i = 0; i < MAX_SLOTS; i++) {
       const s = slots[i];
-      const on = s.phase !== 'free' && s.energy > 0;
-      const e = on ? s.energy : 0;
+      const e = s.phase !== 'free' ? Math.max(0, s.energy) : 0;
       this.u.uEv.value[i].set(s.theta, s.width, s.height, e);
       this.u.uEvS.value[i].set(s.spike * e, s.jitter, 0, 0);
-      sumR += e * s.height * s.width;
-      sumS += e * s.spike;
-    }
-    const capR = Math.max(sumR, RIDGE_CAP), capS = Math.max(sumS, SPIKE_CAP);
-    let accR = 0, accS = 0;
-    for (let i = 0; i < MAX_SLOTS; i++) {
-      const s = slots[i];
-      const e = s.phase !== 'free' ? s.energy : 0;
-      accR += (e * s.height * s.width) / capR;
-      accS += (e * s.spike) / capS;
-      this.u.uCdfR.value[i] = e > 0 ? accR : -1;
-      this.u.uCdfS.value[i] = e > 0 ? accS : -1;
+      if (s.phase !== 'free') {
+        this.u.uShareR.value[i] = Math.min(1, (s.height * s.width) / RIDGE_CAP);
+        this.u.uShareS.value[i] = Math.min(1, s.spike / SPIKE_CAP);
+      }
     }
   }
 }

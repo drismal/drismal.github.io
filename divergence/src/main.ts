@@ -109,7 +109,7 @@ async function main() {
     endAll: () => bus.endAll(),
     toggleNight: () => { manualNight = !(manualNight ?? nightTarget()); },
     toggleEclipse: () => { manualEclipse = !manualEclipse; },
-    setParticles: (n) => { particles = clamp(n, 60000, POOL_MAX); ridges.setCount(particles); adaptive = false; },
+    setParticles: (n) => { particles = clamp(n, 60000, POOL_MAX); adaptive = false; },
     stats,
   };
   (window as unknown as Record<string, unknown>).divergence = {
@@ -143,7 +143,8 @@ async function main() {
   let particles = clamp(P.particles, 60000, POOL_MAX);
   let adaptive = !Q.has('particles');
   if (Q.has('particles')) particles = clamp(+Q.get('particles')!, 1000, POOL_MAX);
-  ridges.setCount(particles);
+  let shown = particles;          // drawn count glides toward `particles` (no density pops)
+  ridges.setCount(shown);
   let qStart = performance.now(), qFrames = 0, qRound = 0;
   let fpsT = performance.now(), fpsN = 0;
 
@@ -216,6 +217,7 @@ async function main() {
     v.uDot.value.copy(dot);
     v.uTA.value = tA; v.uTB.value = tB; v.uWA.value = wA;
     ridges.sync(bus.slots);
+    if (Math.abs(shown - particles) > 1) { shown += (particles - shown) * Math.min(1, dt * 0.8); ridges.setCount(shown); }
 
     renderer.render(scene, camera);
     callouts.update(now, dt, bus.slots, cx, cy, R, R0, W, H, jitPhase, maxRidge, pal);
@@ -237,7 +239,6 @@ async function main() {
         if (dprCap > 1) { dprCap = 1; renderer.setPixelRatio(1); resize(); }
       } else if (fps < 40) particles = Math.max(60000, particles * 0.8);
       else if (fps > 57 && qRound > 0) particles = Math.min(POOL_MAX, particles * 1.3);
-      ridges.setCount(particles);
       qRound++; qStart = now; qFrames = 0;
     }
     requestAnimationFrame(frame);

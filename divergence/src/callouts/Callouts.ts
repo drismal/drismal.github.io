@@ -208,8 +208,8 @@ export class Callouts {
         if (this.placed.some((p) => segHits(p, M.x, M.y, g.ux, g.uy))) return false;
         return true;
       };
-      // keep the current placement while it stays valid; re-search once a second for a better one
-      if (!c.choice || !ok(c.choice) || now - c.lastSearch > 3000) {
+      // keep the current placement while it stays valid (no jumps); search only when it breaks
+      if (!c.choice || !ok(c.choice)) {
         c.lastSearch = now;
         const found = this.search(ok, R, side0, v0);
         if (found) c.choice = found;

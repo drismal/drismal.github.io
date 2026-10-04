@@ -29,47 +29,152 @@ const pctR = (v: number) => `${(v * 100).toFixed(1)} % R`;
 const x = (v: number) => `× ${v.toFixed(2)}`;
 const sec = (v: number) => `${v.toFixed(1)} с`;
 const k = (v: number) => `${Math.round(v / 1000)} тыс.`;
+const n0 = (v: number) => `${Math.round(v)}`;
+const deg = (v: number) => `${Math.round(v)}°`;
+const pct = (v: number) => `${Math.round(v * 100)} %`;
+const f2 = (v: number) => v.toFixed(2);
 
-const TABS: { id: string; title: string; sliders?: Slider[] }[] = [
+type Item = Slider | { group: string };
+const G = (group: string) => ({ group });
+
+const TABS: { id: string; title: string; items?: Item[] }[] = [
   {
-    id: 'ring', title: 'Кольцо', sliders: [
+    id: 'ring', title: 'Кольцо', items: [
+      G('Форма'),
       { key: 'ringScale', label: 'Размер кольца', min: 0.6, max: 1.25, step: 0.01, fmt: x, hint: 'Радиус = 0,30 ширины экрана, но не больше 0,40 высоты' },
       { key: 'coreWidth', label: 'Толщина нити', min: 0.002, max: 0.015, step: 0.0005, fmt: pctR },
       { key: 'threadOffset', label: 'Расхождение двух нитей', min: 0, max: 0.03, step: 0.001, fmt: pctR },
-      { key: 'lobeAmp', label: 'Крупные лепестки края', min: 0, max: 0.06, step: 0.001, fmt: pctR, hint: '6–7 волн по окружности' },
-      { key: 'rippleAmp', label: 'Мелкая рябь края', min: 0, max: 0.03, step: 0.001, fmt: pctR },
+      { key: 'threadDim', label: 'Яркость второй нити', min: 0, max: 1, step: 0.01, fmt: pct },
+      { key: 'innerWobble', label: 'Неровность внутреннего края', min: 0, max: 0.02, step: 0.0005, fmt: pctR },
+      G('Внешний край'),
+      { key: 'lobeAmp', label: 'Крупные лепестки', min: 0, max: 0.06, step: 0.001, fmt: pctR, hint: '6–7 волн по окружности' },
+      { key: 'rippleAmp', label: 'Мелкая рябь', min: 0, max: 0.03, step: 0.001, fmt: pctR },
       { key: 'stipple', label: 'Зернистость туши', min: 0, max: 0.3, step: 0.01, fmt: (v) => `±${Math.round(v * 100)} %` },
     ],
   },
   {
-    id: 'ridges', title: 'Хребты', sliders: [
-      { key: 'ridgeHeightScale', label: 'Высота хребтов', min: 0.5, max: 3, step: 0.05, fmt: x },
-      { key: 'ridgeLayers', label: 'Число слоёв (горизонталей)', min: 3, max: 14, step: 1, fmt: (v) => `${v}` },
-      { key: 'ridgeWaveFreq', label: 'Частота волн', min: 3, max: 30, step: 0.5, fmt: (v) => `${v.toFixed(1)} / рад` },
-      { key: 'ridgeWaveAmp', label: 'Волнистость слоёв', min: 0, max: 1.2, step: 0.01, fmt: (v) => v.toFixed(2) },
+    id: 'bg', title: 'Фоновые иглы', items: [
+      G('В покое (нет событий)'),
+      { key: 'bgNeedleMin', label: 'Сколько игл — минимум', min: 0, max: 24, step: 1, fmt: n0 },
+      { key: 'bgNeedleMax', label: 'Сколько игл — максимум', min: 0, max: 24, step: 1, fmt: n0 },
+      { key: 'bgNeedleLenMin', label: 'Высота — от', min: 0.005, max: 0.3, step: 0.005, fmt: pctR },
+      { key: 'bgNeedleLenMax', label: 'Высота — до', min: 0.005, max: 0.3, step: 0.005, fmt: pctR },
+      { key: 'bgNeedleLifeMin', label: 'Живёт — от', min: 4, max: 60, step: 1, fmt: sec },
+      { key: 'bgNeedleLifeMax', label: 'Живёт — до', min: 4, max: 60, step: 1, fmt: sec },
+      G('Вторичные иглы (во время событий)'),
+      { key: 'secNeedleCount', label: 'Количество', min: 0, max: 3, step: 0.05, fmt: x, hint: 'Базово: уровень 1 — 4–6, уровень 2 — 6–10, тревога — 12–20 (всего не больше 24)' },
+      { key: 'secNeedleLenMin', label: 'Высота — от', min: 0.01, max: 0.5, step: 0.005, fmt: pctR },
+      { key: 'secNeedleLenMax', label: 'Высота — до', min: 0.01, max: 0.6, step: 0.005, fmt: pctR },
+      { key: 'secNeedleLifeMin', label: 'Живёт — от', min: 0.2, max: 15, step: 0.1, fmt: sec },
+      { key: 'secNeedleLifeMax', label: 'Живёт — до', min: 0.2, max: 20, step: 0.1, fmt: sec },
+      { key: 'needleNearEvent', label: 'Возле события (а не где угодно)', min: 0, max: 1, step: 0.01, fmt: pct },
+      { key: 'needleBunch', label: 'Пучки по 2–3 иглы', min: 0, max: 1, step: 0.01, fmt: pct },
+      { key: 'needleGrow', label: 'Вырастает за', min: 0.05, max: 3, step: 0.05, fmt: sec },
+      { key: 'needleRetract', label: 'Втягивается за', min: 0.1, max: 5, step: 0.1, fmt: sec },
+      G('Форма всех игл'),
+      { key: 'needleWidth', label: 'Толщина', min: 0.2, max: 4, step: 0.05, fmt: x },
+      { key: 'needleWave', label: 'Волнистость', min: 0, max: 0.04, step: 0.0005, fmt: pctR },
+      { key: 'needleWaveFreq', label: 'Волн по длине', min: 0.5, max: 8, step: 0.1, fmt: f2 },
+      { key: 'needleWaveSpeed', label: 'Скорость извивания', min: 0, max: 5, step: 0.05, fmt: x },
+    ],
+  },
+  {
+    id: 'spike', title: 'Главные пики', items: [
+      G('Высота главного пика'),
+      { key: 'spikeLen1', label: 'Уровень 1', min: 0.02, max: 1, step: 0.01, fmt: pctR },
+      { key: 'spikeLen2', label: 'Уровень 2', min: 0.02, max: 1, step: 0.01, fmt: pctR },
+      { key: 'spikeLen3', label: 'Тревога', min: 0.02, max: 1.2, step: 0.01, fmt: pctR },
+      G('Этажность и форма'),
+      { key: 'spikeTiers', label: 'Этажей', min: 0, max: 12, step: 1, fmt: (v) => (v < 0.5 ? 'гладкий' : n0(v)), hint: '0 — гладкий конус, больше — ступенчатая башня' },
+      { key: 'spikeTierDepth', label: 'Резкость ступеней', min: 0, max: 1, step: 0.01, fmt: pct },
+      { key: 'spikeWidth', label: 'Ширина у основания', min: 0.02, max: 0.25, step: 0.002, fmt: pctR },
+      { key: 'spikeTaper', label: 'Сужение к острию', min: 0.3, max: 4, step: 0.05, fmt: f2, hint: 'Меньше — толще у вершины, больше — тонкая игла' },
+      { key: 'spikeWave', label: 'Волнистость слоёв точек', min: 0, max: 1, step: 0.01, fmt: f2 },
+      { key: 'spikeJitter', label: 'Дрожь острия', min: 0, max: 0.01, step: 0.0002, fmt: (v) => `${(v * 1000).toFixed(1)} мрад` },
+    ],
+  },
+  {
+    id: 'ridges', title: 'Хребты', items: [
+      G('Высота по уровням'),
+      { key: 'ridgeHeightScale', label: 'Общий множитель', min: 0.3, max: 3, step: 0.05, fmt: x },
+      { key: 'ridgeH1', label: 'Уровень 1', min: 0, max: 0.5, step: 0.005, fmt: pctR },
+      { key: 'ridgeH2', label: 'Уровень 2', min: 0, max: 0.5, step: 0.005, fmt: pctR },
+      { key: 'ridgeH3', label: 'Тревога', min: 0, max: 0.6, step: 0.005, fmt: pctR },
+      G('Ширина сектора по уровням'),
+      { key: 'ridgeW1', label: 'Уровень 1', min: 2, max: 180, step: 1, fmt: (v) => `±${Math.round(v)}°` },
+      { key: 'ridgeW2', label: 'Уровень 2', min: 2, max: 180, step: 1, fmt: (v) => `±${Math.round(v)}°` },
+      { key: 'ridgeW3', label: 'Тревога', min: 2, max: 180, step: 1, fmt: (v) => `±${Math.round(v)}°` },
+      G('Вершины (горный силуэт)'),
+      { key: 'ridgePeakFreq', label: 'Частота вершин', min: 2, max: 80, step: 1, fmt: (v) => `${Math.round(v)} / рад` },
+      { key: 'ridgePeakSharp', label: 'Острота вершин', min: 1, max: 8, step: 0.1, fmt: f2 },
+      { key: 'ridgePeakAmt', label: 'Высота вершин', min: 0, max: 3, step: 0.05, fmt: f2 },
+      { key: 'ridgeSwell', label: 'Плавные холмы', min: 0, max: 2, step: 0.05, fmt: f2 },
+      G('Слои (горизонтали)'),
+      { key: 'ridgeLayers', label: 'Число слоёв', min: 1, max: 16, step: 1, fmt: n0 },
+      { key: 'ridgeWaveFreq', label: 'Частота волн', min: 1, max: 40, step: 0.5, fmt: (v) => `${v.toFixed(1)} / рад` },
+      { key: 'ridgeWaveAmp', label: 'Волнистость слоёв', min: 0, max: 1.5, step: 0.01, fmt: f2 },
+      { key: 'ridgeWaveSpeed', label: 'Скорость колыхания', min: 0, max: 6, step: 0.05, fmt: x },
+      { key: 'ridgeFill', label: 'Точек на контурах (остальное — пыль)', min: 0, max: 1, step: 0.01, fmt: pct },
+      G('Точки'),
       { key: 'ridgeAlpha', label: 'Плотность туши', min: 0.2, max: 2, step: 0.01, fmt: x },
       { key: 'dotSize', label: 'Размер точки', min: 0.6, max: 4, step: 0.05, fmt: (v) => `${v.toFixed(2)} px` },
-      { key: 'spikeWidth', label: 'Ширина главного шипа', min: 0.02, max: 0.16, step: 0.002, fmt: pctR },
       { key: 'particles', label: 'Число частиц', min: 60000, max: 250000, step: 5000, fmt: k, hint: 'Меньше — быстрее на слабом планшете' },
     ],
   },
   {
-    id: 'callouts', title: 'Подписи', sliders: [
-      { key: 'textScale', label: 'Размер текста', min: 0.6, max: 1.6, step: 0.01, fmt: x },
+    id: 'events', title: 'События', items: [
+      G('Жизнь события'),
+      { key: 'attack', label: 'Нарастание', min: 0.05, max: 4, step: 0.05, fmt: sec },
+      { key: 'tau', label: 'Оседание (τ)', min: 0.3, max: 8, step: 0.1, fmt: sec, hint: 'Через 3τ хребты почти исчезают' },
+      { key: 'oneShotHold', label: 'Разовое событие держится', min: 1, max: 60, step: 1, fmt: sec, hint: 'Звонок, движение и т. п.' },
+      G('Демо-режим'),
+      { key: 'demoMin', label: 'Новое событие — не чаще чем раз в', min: 1, max: 300, step: 1, fmt: (v) => `${Math.round(v)} с` },
+      { key: 'demoMax', label: 'Новое событие — не реже чем раз в', min: 1, max: 600, step: 1, fmt: (v) => `${Math.round(v)} с` },
+      { key: 'demoHoldMin', label: 'Длится — от', min: 1, max: 120, step: 1, fmt: sec },
+      { key: 'demoHoldMax', label: 'Длится — до', min: 1, max: 300, step: 1, fmt: sec },
+      { key: 'demoP1', label: 'Доля уровня 1', min: 0, max: 1, step: 0.01, fmt: f2 },
+      { key: 'demoP2', label: 'Доля уровня 2', min: 0, max: 1, step: 0.01, fmt: f2 },
+      { key: 'demoP3', label: 'Доля тревог', min: 0, max: 1, step: 0.01, fmt: f2 },
+      { key: 'demoOneShot', label: 'Разовые события', min: 0, max: 1, step: 0.01, fmt: pct },
     ],
   },
   {
-    id: 'motion', title: 'Движение', sliders: [
-      { key: 'boil', label: 'Скорость «кипения» края', min: 0, max: 1, step: 0.01, fmt: (v) => v.toFixed(2) },
-      { key: 'tau', label: 'Время оседания события', min: 0.5, max: 6, step: 0.1, fmt: sec, hint: 'Через 3τ хребты почти исчезают' },
-      { key: 'breathAmp', label: 'Дыхание кольца', min: 0, max: 0.05, step: 0.001, fmt: (v) => `±${(v * 100).toFixed(1)} %` },
-      { key: 'breathPeriod', label: 'Период дыхания', min: 5, max: 60, step: 1, fmt: (v) => `${v} с` },
-      { key: 'driftAmp', label: 'Дрейф центра', min: 0, max: 0.03, step: 0.001, fmt: (v) => `±${(v * 100).toFixed(1)} %` },
-      { key: 'eclipseWidth', label: 'Ширина серпа (уровень 3)', min: 0.1, max: 0.7, step: 0.01, fmt: pctR },
-      { key: 'rayLength', label: 'Длина лучей затмения', min: 0.1, max: 1.2, step: 0.01, fmt: pctR },
+    id: 'eclipse', title: 'Затмение', items: [
+      G('Серп (только тревога)'),
+      { key: 'eclipseWidth', label: 'Ширина серпа', min: 0.05, max: 0.8, step: 0.01, fmt: pctR },
+      { key: 'eclipseInner', label: 'Затемнение внутри круга', min: 0, max: 0.6, step: 0.01, fmt: pct },
+      { key: 'eclipseIn', label: 'Появляется за', min: 0.1, max: 8, step: 0.1, fmt: sec },
+      { key: 'eclipseOut', label: 'Уходит за', min: 0.1, max: 12, step: 0.1, fmt: sec },
+      G('Лучи'),
+      { key: 'rayLength', label: 'Длина', min: 0, max: 1.5, step: 0.01, fmt: pctR },
+      { key: 'rayFreq', label: 'Частота', min: 5, max: 120, step: 1, fmt: n0 },
+      { key: 'rayDensity', label: 'Сколько лучей', min: 0, max: 1, step: 0.01, fmt: pct },
     ],
   },
-  { id: 'color', title: 'Цвет' },
+  {
+    id: 'callouts', title: 'Подписи', items: [
+      { key: 'textScale', label: 'Размер текста', min: 0.5, max: 1.8, step: 0.01, fmt: x },
+      { key: 'maxCallouts', label: 'Подписей одновременно', min: 0, max: 8, step: 1, fmt: n0 },
+      { key: 'leaderAngle', label: 'Наклон линии', min: 20, max: 85, step: 1, fmt: deg },
+      { key: 'markerSize', label: 'Размер шестиугольника', min: 0.04, max: 0.4, step: 0.005, fmt: pctR },
+      { key: 'calloutGap', label: 'Отступ текста от хребтов', min: 0, max: 0.6, step: 0.01, fmt: pctR },
+      { key: 'typeTime', label: 'Печать текста', min: 0.05, max: 4, step: 0.05, fmt: sec },
+    ],
+  },
+  {
+    id: 'motion', title: 'Движение', items: [
+      { key: 'boil', label: 'Скорость «кипения» края', min: 0, max: 1.5, step: 0.01, fmt: f2 },
+      { key: 'breathAmp', label: 'Дыхание кольца', min: 0, max: 0.06, step: 0.001, fmt: (v) => `±${(v * 100).toFixed(1)} %` },
+      { key: 'breathPeriod', label: 'Период дыхания', min: 3, max: 90, step: 1, fmt: (v) => `${v} с` },
+      { key: 'driftAmp', label: 'Дрейф центра', min: 0, max: 0.04, step: 0.001, fmt: (v) => `±${(v * 100).toFixed(1)} %` },
+      { key: 'driftPeriod', label: 'Период дрейфа', min: 10, max: 300, step: 1, fmt: (v) => `${v} с` },
+    ],
+  },
+  { id: 'color', title: 'Цвет', items: [
+    G('Ночь'),
+    { key: 'nightDim', label: 'Приглушение ночью', min: 0, max: 0.8, step: 0.01, fmt: pct },
+    { key: 'nightFade', label: 'Переход день ↔ ночь', min: 0.5, max: 60, step: 0.5, fmt: sec },
+  ] },
   { id: 'test', title: 'Тест' },
   { id: 'file', title: 'Файл' },
 ];
@@ -94,8 +199,11 @@ const CSS = `
 #st .x{border:0;background:none;font-size:30px;line-height:1;color:#666;cursor:pointer;padding:4px 8px}
 #st .presets{display:flex;gap:6px;padding:4px 20px 10px}
 #st .presets button{flex:1}
+#st .sbox{padding:0 20px 10px}
+#st .search{width:100%;padding:10px 12px;border:1px solid #c9c9c9;border-radius:8px;font:inherit;font-size:16px;background:#fff}
+#st .where{font-size:12px;letter-spacing:.08em;color:#aaa;margin:-4px 0 2px;text-transform:uppercase}
 #st nav{display:flex;flex-wrap:wrap;gap:4px;padding:0 20px 10px;border-bottom:1px solid #e2e2e2}
-#st nav button{border:1px solid transparent;background:none;padding:7px 10px;font:inherit;font-size:15px;letter-spacing:.06em;color:#666;border-radius:6px;cursor:pointer}
+#st nav button{border:1px solid transparent;background:none;padding:7px 9px;font:inherit;font-size:15px;letter-spacing:.06em;color:#666;border-radius:6px;cursor:pointer}
 #st nav button.on{border-color:#cfcfcf;background:#fff;color:#111}
 #st .body{flex:1;overflow-y:auto;padding:14px 20px 30px;-webkit-overflow-scrolling:touch}
 #st .row{margin:0 0 18px}
@@ -154,6 +262,7 @@ export class Settings {
   private body = h('div', { class: 'body' });
   private nav = h('nav');
   private savedMsg = h('span', { class: 'saved' });
+  private search = h('input', { type: 'search', placeholder: 'Поиск настройки…', class: 'search' }) as HTMLInputElement;
   private tab = 'ring';
   private gearTimer = 0;
   private saveTimer = 0;
@@ -176,10 +285,11 @@ export class Settings {
     }
     this.root.append(
       h('header', {}, h('h2', {}, 'НАСТРОЙКИ'), h('button', { class: 'x', onclick: () => this.close(), 'aria-label': 'Закрыть' }, '×')),
-      presets, this.nav, this.body,
+      presets, h('div', { class: 'sbox' }, this.search), this.nav, this.body,
       h('footer', {}, this.savedMsg, h('button', { class: 'b', onclick: () => this.resetTab() }, 'Сбросить вкладку')),
     );
     document.body.append(this.gear, this.root);
+    this.search.addEventListener('input', () => this.render());
 
     // the gear shows up on any touch / mouse move and fades out again
     const wake = () => {
@@ -241,7 +351,7 @@ export class Settings {
 
   private resetTab() {
     const t = TABS.find((x) => x.id === this.tab);
-    if (t?.sliders) for (const s of t.sliders) this.set(s.key, DEFAULT_PARAMS[s.key]);
+    for (const it of t?.items ?? []) if ('key' in it) this.set(it.key, DEFAULT_PARAMS[it.key]);
     if (this.tab === 'color') for (const c of ['dayBg', 'dayInk', 'nightBg', 'nightInk'] as ColorKey[]) this.set(c, DEFAULT_PARAMS[c]);
     this.render();
   }
@@ -251,11 +361,26 @@ export class Settings {
     this.nav.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.id === this.tab));
     this.body.replaceChildren();
     this.fpsEl = null;
+    const q = this.search.value.trim().toLowerCase();
+    if (q) {   // search across every tab
+      let found = 0;
+      for (const tb of TABS) {
+        let group = '';
+        for (const it of tb.items ?? []) {
+          if (!('key' in it)) { group = it.group; continue; }
+          if (!`${tb.title} ${group} ${it.label} ${it.hint ?? ''}`.toLowerCase().includes(q)) continue;
+          this.body.append(h('div', { class: 'where' }, `${tb.title}${group ? ' · ' + group : ''}`), this.slider(it));
+          found++;
+        }
+      }
+      if (!found) this.body.append(h('div', { class: 'hint' }, 'Ничего не найдено'));
+      return;
+    }
     const t = TABS.find((x) => x.id === this.tab)!;
-    if (t.sliders) t.sliders.forEach((s) => this.body.append(this.slider(s)));
+    if (t.id === 'color') this.renderColor();
+    for (const it of t.items ?? []) this.body.append('key' in it ? this.slider(it) : h('h3', {}, it.group.toUpperCase()));
     if (t.id === 'ridges') { this.fpsEl = h('div', { class: 'fps' }); this.body.append(this.fpsEl); }
     if (t.id === 'callouts') this.renderCallouts();
-    if (t.id === 'color') this.renderColor();
     if (t.id === 'test') this.renderTest();
     if (t.id === 'file') this.renderFile();
   }

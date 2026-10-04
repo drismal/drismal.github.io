@@ -3,7 +3,8 @@ import type { Slot } from '../events/EventBus';
 
 export const RIDGE_BASE = 1.03;   // ridges start at 1.03 R
 export const SPIKE_BASE = 1.04;   // main spike starts at 1.04 R
-export const TIP_JITTER = 0.0015;  // radians
+/** tip tremble amplitude (rad), mirrored by the vertex shader */
+export const tip = { jitter: 0.0015 };
 
 export function angDiff(a: number, b: number): number {
   const d = Math.abs((((a - b + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI);
@@ -28,7 +29,7 @@ export function ridgeHeight(theta: number, slots: Slot[]): number {
 /** Main spike tip in CSS pixels — identical to the vertex shader (s = 1). */
 export function spikeTip(s: Slot, cx: number, cy: number, R: number, jitPhase: number, out: { x: number; y: number }) {
   const r = SPIKE_BASE + s.spike * s.energy;
-  const th = s.theta + TIP_JITTER * Math.sin(jitPhase + s.jitter);
+  const th = s.theta + tip.jitter * Math.sin(jitPhase + s.jitter);
   out.x = cx + R * r * Math.cos(th);
   out.y = cy + R * r * Math.sin(th);
   return out;

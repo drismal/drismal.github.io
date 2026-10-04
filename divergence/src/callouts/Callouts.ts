@@ -5,14 +5,15 @@ import type { Strings } from '../config';
 import { spikeTip } from '../ring/shapes';
 
 const NS = 'http://www.w3.org/2000/svg';
-const MAX_CALLOUTS = 4;
+const MAX_CALLOUTS = 8;          // pool size; params.maxCallouts limits how many show
 // timeline after the event appears (ms): spike 0–400, marker, leader, text
-const T_MARK = [400, 700], T_LEAD = [700, 1100], T_TEXT = [1100, 1700];
+const T_MARK = [400, 700], T_LEAD = [700, 1100];
 const T_OUT = 800;
-const SLANTS = [60, 50, 70, 80].map((d) => (d * Math.PI) / 180);   // leader angle to the horizontal
+const RAD = Math.PI / 180;
+const SLANT_ALT = [0, -10, 10, 20];   // tried after the user's leader angle
 // gap between the text block and the ring: `ridge` = count the ridge height, `gap` in R.
 // 0.25 R beyond the ridges is the target (5.2); the rest are fallbacks so nothing ever leaves the screen.
-const CLEARANCES = [{ ridge: 1, gap: 0.25 }, { ridge: 1, gap: 0.15 }, { ridge: 1, gap: 0.06 }, { ridge: 0, gap: 0.12 }];
+const CLEAR_ALT = [1, 0.6, 0.25];      // × the user's gap, then a last resort without ridges
 const TIERS = [0.7, 1.3, 2.6];          // max leader height (R): short leaders first
 const SCALES = [1, 0.9, 0.8, 0.7, 0.6, 0.5];
 const GLYPHS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#%/:АБВГДЕЖЗИКЛМНПРСТУФЦШЭЮЯ';
@@ -67,7 +68,7 @@ class Callout {
   keyText = ''; titleText = '';
   widths = [0, 0, 0, 0];         // measured at R = measureR, scale 1
   measureR = 0;
-  dy = -1; side = 1; vdir = -1; sc = 1; slant = SLANTS[0];
+  dy = -1; side = 1; vdir = -1; sc = 1; slant = 60 * RAD;
   choice: Choice | null = null;
   lastSearch = 0;
   private shown = ['', '', '', '', ''];
@@ -147,8 +148,13 @@ class Callout {
 export class Callouts {
   private items: Callout[] = [];
   private placed: Rect[] = [];
-  /** user setting: × text size */
+  /** user settings */
   textScale = 1;
+  maxCallouts = 4;
+  leaderAngle = 60;   // deg
+  markerSize = 0.15;  // R
+  gap = 0.25;         // R
+  typeMs = 600;
   private tip = { x: 0, y: 0 };
 
   constructor(private root: SVGSVGElement, private strings: Strings) {
@@ -166,7 +172,7 @@ export class Callouts {
     const want = slots
       .filter((s) => (s.phase === 'attack' || s.phase === 'hold') && s.ev.level >= 1)
       .sort((a, b) => b.ev.level - a.ev.level || a.ev.startedAt - b.ev.startedAt)
-      .slice(0, MAX_CALLOUTS);
+      .slice(0, Math.max(0, Math.min(MAX_CALLOUTS, Math.round(this.maxCallouts))));
     for (const c of this.items) {
       if (c.state === 'in' && (!c.slotRef || c.slotRef.ev.id !== c.eventId || !want.includes(c.slotRef))) {
         c.state = 'out'; c.tOut = now; c.outFrom = 1;
@@ -197,7 +203,7 @@ export class Callouts {
       const cx0 = W / 2, cy0 = H / 2, Rk = R0 * 1.03;   // 1.03: room for breathing + drift
       const rA = 1.04 + s.spike;
       const A = { x: cx0 + R0 * rA * Math.cos(s.theta), y: cy0 + R0 * rA * Math.sin(s.theta) };
-      const ro = 0.075 * R0;
+      const ro = 0.5 * this.markerSize * R0;
       const mDist = R0 * rA;
       const side0 = Math.cos(s.theta) >= 0 ? 1 : -1;
       const v0 = Math.sin(s.theta) < 0 ? -1 : 1;
@@ -220,7 +226,7 @@ export class Callouts {
         c.lastSearch = now;
         const found = this.search(ok, R0, side0, v0);
         if (found) c.choice = found;
-        else if (!c.choice) c.choice = { dy: 0.4 * R0, v: v0, s: side0, sc: 0.5, slant: SLANTS[0], clear: 0, ridge: 0 };
+        else if (!c.choice) c.choice = { dy: 0.4 * R0, v: v0, s: side0, sc: 0.5, slant: this.leaderAngle * RAD, clear: 0, ridge: 0 };
       }
       const best = c.choice;
       // smooth (snap on first frame or when the block flips)
@@ -237,10 +243,10 @@ export class Callouts {
   private search(ok: (ch: Choice) => boolean, R: number, s0: number, v0: number): Choice | null {
     let lo = 0.12 * R;
     for (const tier of TIERS) {
-      for (const cl of CLEARANCES)
+      for (const cl of [...CLEAR_ALT.map((k) => ({ ridge: 1, gap: this.gap * k })), { ridge: 0, gap: 0.12 }])
         for (const sc of SCALES)
           for (const s of [s0, -s0])
-            for (const slant of SLANTS)
+            for (const slant of SLANT_ALT.map((d) => Math.min(85, Math.max(20, this.leaderAngle + d)) * RAD))
               for (const v of [v0, -v0])
                 for (let dy = lo; dy < tier * R; dy += 6) {
                   const ch = { dy, v, s, sc, slant, clear: cl.gap, ridge: cl.ridge };
@@ -273,7 +279,7 @@ export class Callouts {
       const t = now - c.t0;
       kMark = easeOut(seg(t, T_MARK[0], T_MARK[1]));
       kLead = easeOut(seg(t, T_LEAD[0], T_LEAD[1]));
-      kText = seg(t, T_TEXT[0], T_TEXT[1]);
+      kText = seg(t, 1100, 1100 + Math.max(50, this.typeMs));
     } else {
       const t = now - c.tOut;                    // reverse order, 0.8 s
       kText = 1 - seg(t, 0, 300);
@@ -286,7 +292,7 @@ export class Callouts {
     const rot = 30 * (1 - kMark);
     c.marker.setAttribute('transform', `translate(${M.x.toFixed(1)},${M.y.toFixed(1)}) rotate(${rot.toFixed(1)}) scale(${kMark.toFixed(3)})`);
     c.hexO.setAttribute('points', hexPoints(ro));
-    c.hexI.setAttribute('points', hexPoints(0.025 * R));
+    c.hexI.setAttribute('points', hexPoints(ro / 3));
     c.hexO.style.stroke = c.hexI.style.stroke = pal.line;
     c.dot.style.fill = pal.dot;
     c.marker.style.opacity = kMark > 0.001 ? '1' : '0';

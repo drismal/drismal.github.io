@@ -1,7 +1,8 @@
 // Divergence ring — wall screen for a smart home.
 import * as THREE from 'three';
 import { loadConfig, type Level } from './config';
-import { EventBus, shape, type DivergenceEvent } from './events/EventBus';
+import { EventBus, shape, timing, LEVELS, type DivergenceEvent } from './events/EventBus';
+import { tip } from './ring/shapes';
 import { RingPass } from './ring/RingPass';
 import { Ridges, POOL_MAX } from './ring/Ridges';
 import { Needles } from './ring/Needles';
@@ -84,7 +85,7 @@ async function main() {
     hooks.onStatus(false);
   }
   // demo runs on its own (adapter "demo") or can be switched on from the settings window
-  const demo = new Demo(cfg.sensors, emit);
+  const demo = new Demo(cfg.sensors, emit, P);
   let demoOn = adapterName === 'demo';
   if (demoOn) demo.start();
   adapter?.start();
@@ -114,7 +115,7 @@ async function main() {
     demo: () => demoOn,
     setDemo: (v) => { demoOn = v; if (v) demo.start(); else demo.stop(); },
     setParticles: (n) => { particles = clamp(n, 60000, POOL_MAX); adaptive = false; },
-    changed: (key) => { if (key === 'ringScale') resize(); },
+    changed: (key) => { if (key === 'ringScale') resize(); if ((key === 'demoMin' || key === 'demoMax') && demoOn) demo.start(); },
     stats,
   };
   const settings = new Settings(settingsApi);
@@ -160,15 +161,25 @@ async function main() {
   const bg = new THREE.Color(), ink = new THREE.Color(), dot = new THREE.Color();
   const pal: Palette = { ...PAL_DAY };
 
+  let levelSig = '', wavePh = 0, needlePh = 0;
   const frame = (now: number) => {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     const t = (now - t0) / 1000;
     bus.tau = P.tau;
-    if (shape.heightScale !== P.ridgeHeightScale) {          // live: reshape running events too
+    // per-level shapes from the settings; live: running events reshape smoothly
+    const lsig = `${P.ridgeHeightScale}|${P.ridgeH1}|${P.ridgeH2}|${P.ridgeH3}|${P.ridgeW1}|${P.ridgeW2}|${P.ridgeW3}|${P.spikeLen1}|${P.spikeLen2}|${P.spikeLen3}`;
+    if (lsig !== levelSig) {
+      levelSig = lsig;
       shape.heightScale = P.ridgeHeightScale;
+      LEVELS[1] = { width: P.ridgeW1, height: P.ridgeH1, spike: P.spikeLen1 };
+      LEVELS[2] = { width: P.ridgeW2, height: P.ridgeH2, spike: P.spikeLen2 };
+      LEVELS[3] = { width: P.ridgeW3, height: P.ridgeH3, spike: P.spikeLen3 };
       for (const s of bus.slots) if (s.phase !== 'free') s.setLevel(s.ev.level, now, false);
     }
+    timing.attackMs = P.attack * 1000;
+    timing.oneShotHoldMs = P.oneShotHold * 1000;
+    tip.jitter = P.spikeJitter;
     bus.update(now);
 
     // breathing and slow drift of the centre (2)
@@ -178,7 +189,9 @@ async function main() {
 
     // clocks: two wrapping clocks cross-faded; periodic phases computed in double precision
     const tA = t % 4096, tB = (t + 2048) % 4096, wA = 1 - Math.abs(tA / 2048 - 1);
-    const wavePhase = (t * 0.05) % TAU, jitPhase = (t * 7.3) % TAU;
+    wavePh = (wavePh + dt * 0.05 * P.ridgeWaveSpeed) % TAU;
+    needlePh = (needlePh + dt * 1.5 * P.needleWaveSpeed) % TAU;
+    const wavePhase = wavePh, jitPhase = (t * 7.3) % TAU;
 
     // level-driven globals
     const maxLevel = bus.maxLevel();
@@ -190,18 +203,19 @@ async function main() {
       maxRidge = Math.max(maxRidge, s.energy * s.height);
     }
     core += (1 + 0.35 * lvl2 - core) * Math.min(1, dt * 3);
-    ecl = eclTarget > ecl ? Math.min(1, ecl + dt / 1.5) : Math.max(0, ecl - dt / 3);           // in 1.5 s, out 3 s
+    ecl = eclTarget > ecl ? Math.min(1, ecl + dt / Math.max(0.05, P.eclipseIn)) : Math.max(0, ecl - dt / Math.max(0.05, P.eclipseOut));
     const da = Math.atan2(Math.sin(eclTargetAng - eclAng), Math.cos(eclTargetAng - eclAng));
     eclAng = ecl < 0.01 ? eclTargetAng : eclAng + da * Math.min(1, dt * 2);
     const nt = nightTarget() ? 1 : 0;
-    night = nt > night ? Math.min(1, night + dt / 10) : Math.max(0, night - dt / 10);          // 10 s transition
+    const nf = Math.max(0.05, P.nightFade);
+    night = nt > night ? Math.min(1, night + dt / nf) : Math.max(0, night - dt / nf);
 
     // colours
     C.dayBg.set(P.dayBg); C.nightBg.set(P.nightBg); C.dayInk.set(P.dayInk); C.nightInk.set(P.nightInk);
     bg.copy(C.dayBg).lerp(C.nightBg, night);
     ink.copy(C.dayInk).lerp(C.nightInk, night);
     dot.copy(C.dayInk).lerp(C.nightInk, night);
-    const k = 1 - 0.3 * night;
+    const k = 1 - P.nightDim * night;
     (Object.keys(PAL_DAY) as (keyof Palette)[]).forEach((key) => { pal[key] = mixHex(PAL_DAY[key], PAL_NIGHT[key], night, k); });
     renderer.setClearColor(bg);
     document.body.style.background = `#${bg.getHexString()}`;
@@ -215,8 +229,11 @@ async function main() {
     u.uThreadOff.value = P.threadOffset; u.uCoreW.value = P.coreWidth; u.uCore.value = core;
     u.uStipple.value = P.stipple; u.uStippleT.value = (t * 0.5) % 1000;
     u.uEclipse.value = ecl; u.uEclAng.value = eclAng; u.uEclWidth.value = P.eclipseWidth; u.uRayLen.value = P.rayLength;
+    u.uEclInner.value = P.eclipseInner; u.uRayFreq.value = P.rayFreq; u.uRayDensity.value = P.rayDensity;
+    u.uThreadDim.value = P.threadDim; u.uInnerWobble.value = P.innerWobble;
+    u.uNeedleP.value.set(P.needleWidth, P.needleWave, P.needleWaveFreq, needlePh);
     u.uTA.value = tA; u.uTB.value = tB; u.uWA.value = wA;
-    needles.update(now, bus.slots, maxLevel, u.uNeedle.value);
+    needles.update(now, bus.slots, maxLevel, P, u.uNeedle.value);
 
     // particle uniforms
     const v = ridges.u;
@@ -224,13 +241,17 @@ async function main() {
     v.uWavePhase.value = wavePhase; v.uJitPhase.value = jitPhase;
     v.uLayers.value = Math.round(P.ridgeLayers); v.uWaveFreq.value = P.ridgeWaveFreq; v.uWaveAmp.value = P.ridgeWaveAmp;
     v.uSize.value = P.dotSize; v.uSpikeW.value = P.spikeWidth; v.uAlpha.value = P.ridgeAlpha;
+    v.uPeak.value.set(P.ridgePeakFreq, P.ridgePeakSharp, P.ridgePeakAmt, P.ridgeSwell);
+    v.uSpikeP.value.set(Math.round(P.spikeTiers), P.spikeTierDepth, P.spikeTaper, P.spikeWave);
+    v.uRidgeFill.value = P.ridgeFill; v.uJitAmp.value = P.spikeJitter;
     v.uDot.value.copy(dot);
     v.uTA.value = tA; v.uTB.value = tB; v.uWA.value = wA;
     ridges.sync(bus.slots);
     if (Math.abs(shown - particles) > 1) { shown += (particles - shown) * Math.min(1, dt * 0.8); ridges.setCount(shown); }
 
     renderer.render(scene, camera);
-    callouts.textScale = P.textScale;
+    callouts.textScale = P.textScale; callouts.maxCallouts = P.maxCallouts; callouts.leaderAngle = P.leaderAngle;
+    callouts.markerSize = P.markerSize; callouts.gap = P.calloutGap; callouts.typeMs = P.typeTime * 1000;
     callouts.update(now, dt, bus.slots, cx, cy, R, R0, W, H, jitPhase, maxRidge, pal);
 
     // status line: only after 5 s without connection

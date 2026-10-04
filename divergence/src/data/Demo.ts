@@ -3,6 +3,7 @@ import type { SensorCfg } from '../config';
 import type { DivergenceEvent } from '../events/EventBus';
 import type { Level } from '../config';
 import type { Adapter } from './types';
+import type { Params } from '../config';
 
 export const SAMPLES: { title: string; text: string; value: string }[] = [
   { title: 'GATE, FRONT YARD', text: 'ENTRY GATE OPEN', value: 'STATUS: OPEN' },
@@ -18,18 +19,24 @@ export class Demo implements Adapter {
   private timer = 0;
   private n = 0;
 
-  constructor(private sensors: SensorCfg[], private emit: (e: DivergenceEvent) => void) {}
+  constructor(private sensors: SensorCfg[], private emit: (e: DivergenceEvent) => void, private P: Params) {}
 
-  start() { this.schedule(4000); }
+  start() { clearTimeout(this.timer); this.schedule(4000); }
   stop() { clearTimeout(this.timer); }
 
   private schedule(ms: number) {
-    this.timer = window.setTimeout(() => { this.fire(); this.schedule(15000 + Math.random() * 45000); }, ms);
+    this.timer = window.setTimeout(() => {
+      this.fire();
+      const a = Math.max(1, this.P.demoMin), b = Math.max(a, this.P.demoMax);
+      this.schedule((a + Math.random() * (b - a)) * 1000);
+    }, ms);
   }
 
   fire(level?: Level, angle?: number) {
     const r = Math.random();
-    const lv: Level = level ?? (r < 0.5 ? 1 : r < 0.82 ? 2 : 3);
+    const w1 = Math.max(0, this.P.demoP1), w2 = Math.max(0, this.P.demoP2), w3 = Math.max(0, this.P.demoP3);
+    const rw = r * (w1 + w2 + w3 || 1);
+    const lv: Level = level ?? (rw < w1 ? 1 : rw < w1 + w2 ? 2 : 3);
     const s = this.sensors.length ? this.sensors[Math.floor(Math.random() * this.sensors.length)] : null;
     const sample = SAMPLES[Math.floor(Math.random() * SAMPLES.length)];
     const rule = s?.rules.find((x) => x.level === lv) ?? s?.rules[0];
@@ -43,11 +50,12 @@ export class Demo implements Adapter {
       value: (rule?.value ?? sample.value).replace(/\{value\}/g, '—').replace(/\{unit\}|\{delta:\d+\}|\{state\}/g, ''),
       startedAt: Date.now(),
       active: true,
-      oneShot: Math.random() < 0.25,
+      oneShot: Math.random() < this.P.demoOneShot,
     };
     this.emit(ev);
     if (!ev.oneShot) {
-      const hold = 6000 + Math.random() * 18000;
+      const a = this.P.demoHoldMin, b = Math.max(a, this.P.demoHoldMax);
+      const hold = (a + Math.random() * (b - a)) * 1000;
       window.setTimeout(() => this.emit({ ...ev, active: false }), hold);
     }
     return ev.id;

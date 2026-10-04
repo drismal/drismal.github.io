@@ -23,9 +23,9 @@ export const LEVELS: Record<1 | 2 | 3, { width: number; height: number; spike: n
 };
 
 export const MAX_SLOTS = 8;
-const ATTACK_MS = 400;
 const TWEEN_MS = 500;
-const ONESHOT_HOLD_MS = 8000;
+/** attack and one-shot hold (ms), set from params */
+export const timing = { attackMs: 400, oneShotHoldMs: 8000 };
 
 export type Phase = 'free' | 'attack' | 'hold' | 'decay';
 
@@ -100,7 +100,7 @@ export class EventBus {
     s.energy = 0;
     s.jitter = Math.random() * Math.PI * 2;
     s.boil = Math.random() * 100;
-    s.holdUntil = ev.oneShot ? now + ATTACK_MS + ONESHOT_HOLD_MS : Infinity;
+    s.holdUntil = ev.oneShot ? now + timing.attackMs + timing.oneShotHoldMs : Infinity;
     s.setLevel(ev.level, now, true);
     this.byId.set(ev.id, s);
   }
@@ -145,7 +145,7 @@ export class EventBus {
       s.tween(now);
       const dt = now - s.phaseStart;
       if (s.phase === 'attack') {
-        const p = Math.min(1, dt / ATTACK_MS);
+        const p = Math.min(1, dt / Math.max(16, timing.attackMs));
         s.energy = s.energyAtPhase + (1 - s.energyAtPhase) * easeOutCubic(p);
         if (p >= 1) { s.phase = 'hold'; s.phaseStart = now; }
       } else if (s.phase === 'hold') {

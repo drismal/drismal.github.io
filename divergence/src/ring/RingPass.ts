@@ -28,6 +28,9 @@ export class RingPass {
     uEclAng: { value: 0 },
     uEclWidth: { value: 0.35 },
     uRayLen: { value: 0.6 },
+    uEclInner: { value: 0.15 }, uRayFreq: { value: 40 }, uRayDensity: { value: 0.4 },
+    uThreadDim: { value: 0.7 }, uInnerWobble: { value: 0.0025 },
+    uNeedleP: { value: new THREE.Vector4(1, 0, 2, 0) },
     uTA: { value: 0 }, uTB: { value: 0 }, uWA: { value: 1 },
   };
 

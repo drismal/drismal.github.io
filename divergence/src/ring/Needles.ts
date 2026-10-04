@@ -1,6 +1,8 @@
 // Small needles (3.5) and secondary spikes (4.4): a fixed CPU pool drawn by the ring shader.
+// All counts, lengths and timings come from the user's params.
 import type * as THREE from 'three';
 import type { Slot } from '../events/EventBus';
+import type { Params } from '../config';
 import { ridgeHeight } from './shapes';
 import { NEEDLES } from './RingPass';
 
@@ -10,8 +12,8 @@ interface Needle {
   born: number; grow: number; life: number; retract: number;
 }
 
-// Section 4.4: needle count per level
-const COUNT: [number, number][] = [[2, 5], [4, 6], [6, 10], [12, 20]];
+// Section 4.4: secondary needle count per level (× params.secNeedleCount)
+const COUNT: [number, number][] = [[0, 0], [4, 6], [6, 10], [12, 20]];
 const rnd = (a: number, b: number) => a + Math.random() * (b - a);
 
 export class Needles {
@@ -22,19 +24,25 @@ export class Needles {
   private retarget = 0;
   private nextSpawn = 0;
   private lastLevel = 0;
+  private lastSig = '';
 
-  update(now: number, slots: Slot[], level: number, out: THREE.Vector4[]) {
-    if (now > this.retarget || level !== this.lastLevel) {
-      const [a, b] = COUNT[level];
-      this.target = Math.round(rnd(a, b + 0.49));
+  update(now: number, slots: Slot[], level: number, P: Params, out: THREE.Vector4[]) {
+    const sig = `${P.bgNeedleMin}|${P.bgNeedleMax}|${P.secNeedleCount}`;
+    if (now > this.retarget || level !== this.lastLevel || sig !== this.lastSig) {
+      let a: number, b: number;
+      if (level === 0) { a = Math.min(P.bgNeedleMin, P.bgNeedleMax); b = Math.max(P.bgNeedleMin, P.bgNeedleMax); }
+      else { [a, b] = COUNT[level]; a *= P.secNeedleCount; b *= P.secNeedleCount; }
+      this.target = Math.min(NEEDLES, Math.round(rnd(a, b + 0.49)));
       this.retarget = now + rnd(4000, 9000);
       this.lastLevel = level;
+      this.lastSig = sig;
     }
-    const alive = this.pool.reduce((n, p) => n + (p.on ? 1 : 0), 0);
+    let alive = 0;
+    for (const p of this.pool) if (p.on) alive++;
     if (alive < this.target && now > this.nextSpawn) {
-      const bunch = level > 0 && Math.random() < 0.35 ? (Math.random() < 0.5 ? 2 : 3) : 1;
-      const theta = this.pickAngle(slots, level);
-      for (let b = 0; b < bunch; b++) this.spawn(now, level, theta + (b ? rnd(-0.05, 0.05) : 0));
+      const bunch = level > 0 && Math.random() < P.needleBunch ? (Math.random() < 0.5 ? 2 : 3) : 1;
+      const theta = this.pickAngle(slots, level, P);
+      for (let b = 0; b < bunch; b++) this.spawn(now, level, theta + (b ? rnd(-0.05, 0.05) : 0), P);
       this.nextSpawn = now + (level === 0 ? rnd(1500, 4000) : rnd(80, 350));
     }
     for (let i = 0; i < NEEDLES; i++) {
@@ -55,8 +63,8 @@ export class Needles {
     }
   }
 
-  private pickAngle(slots: Slot[], level: number): number {
-    if (level > 0 && Math.random() < 0.6) {
+  private pickAngle(slots: Slot[], level: number, P: Params): number {
+    if (level > 0 && Math.random() < P.needleNearEvent) {
       const act = slots.filter((s) => s.phase === 'attack' || s.phase === 'hold');
       if (act.length) {
         const s = act[Math.floor(Math.random() * act.length)];
@@ -66,20 +74,23 @@ export class Needles {
     return rnd(0, Math.PI * 2);
   }
 
-  private spawn(now: number, level: number, theta: number) {
+  private spawn(now: number, level: number, theta: number, P: Params) {
     const p = this.pool.find((x) => !x.on);
     if (!p) return;
     p.on = true;
     p.theta = theta;
     p.born = now;
-    if (level === 0) {           // 3.5: tiny, slow (8–20 s)
+    if (level === 0) {           // 3.5: tiny, slow
       p.mini = true;
-      p.maxLen = rnd(0.03, 0.06);
-      p.grow = 2000; p.life = rnd(4000, 16000); p.retract = 2000;
-    } else {                     // 4.4: grow 0.3 s, retract 1–2 s — the most mobile elements
+      p.maxLen = rnd(P.bgNeedleLenMin, Math.max(P.bgNeedleLenMin, P.bgNeedleLenMax));
+      p.grow = 2000; p.retract = 2000;
+      p.life = Math.max(500, rnd(P.bgNeedleLifeMin, Math.max(P.bgNeedleLifeMin, P.bgNeedleLifeMax)) * 1000 - 4000);
+    } else {                     // 4.4: the most mobile elements
       p.mini = false;
-      p.maxLen = rnd(0.05, 0.2);
-      p.grow = 300; p.life = rnd(1000, 4000); p.retract = rnd(1000, 2000);
+      p.maxLen = rnd(P.secNeedleLenMin, Math.max(P.secNeedleLenMin, P.secNeedleLenMax));
+      p.grow = P.needleGrow * 1000;
+      p.life = rnd(P.secNeedleLifeMin, Math.max(P.secNeedleLifeMin, P.secNeedleLifeMax)) * 1000;
+      p.retract = P.needleRetract * 1000 * rnd(0.7, 1.3);
     }
   }
 }

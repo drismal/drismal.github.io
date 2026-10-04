@@ -7,7 +7,9 @@ uniform vec3 uBg, uInk;
 uniform float uNight;
 uniform float uLobeAmp, uRippleAmp, uBoil, uThreadOff, uCoreW, uCore, uStipple, uStippleT;
 uniform vec4 uNeedle[24];   // θ, base radius (R), length (R), alpha
-uniform float uEclipse, uEclAng, uEclWidth, uRayLen;
+uniform float uEclipse, uEclAng, uEclWidth, uRayLen, uEclInner, uRayFreq, uRayDensity;
+uniform float uThreadDim, uInnerWobble;
+uniform vec4 uNeedleP;      // width ×, wave amplitude (R), waves along needle, phase
 
 float seg(float x, float a, float b, float va, float vb){ return mix(va, vb, smoothstep(a, b, x)); }
 // Section 3.1: darkness across the ring, r/R -> 0..1
@@ -43,11 +45,11 @@ void main(){
     float w = uCoreW * uCore;
     float c1 = 1.03;
     float t1 = .92 * exp(-pow((x - c1) / w, 2.));
-    float t2 = .92 * .7 * exp(-pow((x - c1 - off) / w, 2.));
+    float t2 = .92 * uThreadDim * exp(-pow((x - c1 - off) / w, 2.));
     d = 1. - (1. - base*.8) * (1. - t1) * (1. - t2);
 
     // 3.1 inner edge: sharp mask, almost a perfect circle (≤ 0.3 % R)
-    float xin = x + .0025 * (ringNT(th, 3., uBoil*.5, 29.) - .5);
+    float xin = x + uInnerWobble * (ringNT(th, 3., uBoil*.5, 29.) - .5);
     d *= smoothstep(1. - aa*.6, 1. + aa*.6, xin);
 
     // 3.5 / 4.4 needles: thin dark cones growing from the outer edge
@@ -57,8 +59,11 @@ void main(){
       if(n.w < .004) continue;
       float u = (x - n.y) / max(n.z, 1e-4);
       if(u < -.05 || u > 1.) continue;
-      float lat = angDiff(th, n.x) * x;
-      float hw = (.004 + .02*n.z) * (1. - clamp(u, 0., 1.));
+      float uc = clamp(u, 0., 1.);
+      // waviness: the centre line bends sideways, more toward the tip
+      float bend = uNeedleP.y * uc * sin(uc * uNeedleP.z * 6.2832 + n.x * 13.7 + uNeedleP.w) / max(x, .5);
+      float lat = angDiff(th, n.x + bend) * x;
+      float hw = (.004 + .02*n.z) * uNeedleP.x * (1. - uc);
       nd = max(nd, (1. - smoothstep(hw, hw + aa, lat)) * n.w * .9);
     }
     d = 1. - (1. - d) * (1. - nd);
@@ -70,11 +75,11 @@ void main(){
     float rel = x - 1.04;
     float cw = max(uEclWidth * side * uEclipse, 1e-4);
     float cres = (1. - smoothstep(cw*.45, cw, rel)) * smoothstep(-.04, 0., rel) * side * uEclipse;
-    float rmask = smoothstep(.6, .88, ringN(th, 40., uTA*.08));
+    float rmask = smoothstep(1. - uRayDensity, 1. - uRayDensity + .28, ringN(th, uRayFreq, uTA*.08));
     float rl = max(uRayLen * side * uEclipse * (.35 + .65*ringN(th, 9., uTA*.05 + 5.)), 1e-4);
     float ray = rmask * exp(-max(rel, 0.) / (rl*.45)) * step(0., rel) * side * uEclipse;
     d = 1. - (1. - d) * (1. - cres*.95) * (1. - ray*.7);
-    innerDark = .15 * side * uEclipse * smoothstep(.25, 1., x) * (1. - step(1., x));
+    innerDark = uEclInner * side * uEclipse * smoothstep(.25, 1., x) * (1. - step(1., x));
     d += uNight * uEclipse * .15 * exp(-max(x - 1.04, 0.) / .15) * step(1., x);   // soft glow at night
   }
 

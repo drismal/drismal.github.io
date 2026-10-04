@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#F9F9F9">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Divergence Ring</title>
+<link rel="stylesheet" href="/fonts/fonts.css">
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#F9F9F9;touch-action:manipulation;-webkit-user-select:none;user-select:none;cursor:none}
+  #stage{position:fixed;inset:0}
+  #stage canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  #callouts{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;
+    font-family:"Divergence","Barlow Condensed","Roboto Condensed","Arial Narrow",sans-serif}
+  #status{position:fixed;left:2vw;bottom:1.6vh;font:400 12px "Divergence","Barlow Condensed",sans-serif;letter-spacing:.08em;color:#9a9a9a;pointer-events:none;opacity:0;transition:opacity .6s}
+  .lil-gui{cursor:auto}
+</style>
+</head>
+<body>
+<div id="stage">
+  <svg id="callouts" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<div id="status"></div>
+<script type="module" src="./src/main.ts"></script>
+</body>
+</html>

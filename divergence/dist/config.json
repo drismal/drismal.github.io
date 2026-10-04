@@ -1,0 +1,54 @@
+{
+  "adapter": "demo",
+  "homeassistant": {
+    "url": "http://homeassistant.local:8123",
+    "token": "PASTE_LONG_LIVED_TOKEN_HERE",
+    "sunEntity": "sun.sun"
+  },
+  "mqtt": { "url": "ws://192.168.1.10:9001", "username": "", "password": "" },
+  "night": { "source": "ha_sun", "from": "22:00", "to": "07:00" },
+  "strings": { "divergence": "DIVERGENCE", "valuePrefix": "VALUE: " },
+  "params": {},
+  "sensors": [
+    {
+      "id": "gate", "entity": "binary_sensor.gate", "angle": 45, "title": "GATE, FRONT YARD",
+      "rules": [
+        { "when": "state == 'on'", "level": 1, "text": "ENTRY GATE OPEN", "value": "STATUS: OPEN" },
+        { "when": "state == 'on' && minutes >= 10", "level": 2, "text": "GATE OPEN FOR OVER 10 MIN", "value": "STATUS: OPEN {state}" }
+      ]
+    },
+    {
+      "id": "voltage", "entity": "sensor.mains_voltage", "angle": 320, "title": "MAINS, SWITCHBOARD", "unit": "V",
+      "rules": [
+        { "when": "outside(207, 253)", "level": 2, "text": "MAINS VOLTAGE OUT OF RANGE", "value": "{value} V · NORM 207–253" },
+        { "when": "outside(190, 260)", "level": 3, "text": "CRITICAL MAINS VOLTAGE", "value": "{value} V · NORM 207–253" }
+      ]
+    },
+    {
+      "id": "outdoor_temp", "entity": "sensor.outdoor_temperature", "angle": 200, "title": "OUTDOOR, NORTH", "unit": "°C",
+      "rules": [
+        { "when": "value > 35 || value < -15", "level": 1, "text": "EXTREME OUTDOOR TEMPERATURE", "value": "{value} °C" },
+        { "when": "abs(delta(60)) > 5", "level": 1, "text": "SHARP TEMPERATURE CHANGE", "value": "{delta:60} °C / 1 H" }
+      ]
+    },
+    {
+      "id": "humidity", "entity": "sensor.living_room_humidity", "angle": 120, "title": "LIVING ROOM", "unit": "%",
+      "rules": [
+        { "when": "value < 25 || value > 70", "level": 1, "text": "INDOOR HUMIDITY OUT OF RANGE", "value": "{value} % · NORM 25–70" }
+      ]
+    },
+    {
+      "id": "pressure", "entity": "sensor.outdoor_pressure", "angle": 250, "title": "WEATHER STATION", "unit": "hPa",
+      "rules": [
+        { "when": "delta(180) < -3", "level": 1, "text": "PRESSURE DROPPING", "value": "{delta:180} hPa / 3 H" }
+      ]
+    },
+    {
+      "id": "weather_warning", "entity": "sensor.weather_warning", "angle": 0, "title": "WEATHER", "staleMinutes": 0,
+      "rules": [
+        { "when": "state == 'thunderstorm' || state == 'squall' || state == 'hail'", "level": 2, "text": "SEVERE WEATHER WARNING", "value": "STATUS: {state}" },
+        { "when": "state == 'storm'", "level": 3, "text": "STORM WARNING", "value": "STATUS: {state}" }
+      ]
+    }
+  ]
+}

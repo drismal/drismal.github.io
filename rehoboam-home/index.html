@@ -7,53 +7,50 @@
 <title>Rehoboam Home</title>
 <link rel="stylesheet" href="fonts/fonts.css">
 <style>
-  html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:manipulation;-webkit-user-select:none;user-select:none}
+  html,body{margin:0;height:100%;background:#f9f9f6;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none}
   canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
-  #hud,#lblwrap{position:fixed;inset:0;pointer-events:none;
-       font-family:"RC","Barlow Condensed","Arial Narrow",sans-serif}
+  #hud{position:fixed;inset:0;pointer-events:none;font-family:"RC","Barlow Condensed","Arial Narrow",sans-serif}
   svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
   svg .ln{fill:none;stroke:#2b2b2b;stroke-linejoin:miter;stroke-linecap:butt}
   svg text{fill:#1d1d1d;letter-spacing:.02em}
-  .lbl{position:absolute;white-space:nowrap;letter-spacing:.02em;line-height:1.05;color:#111}
-  .lbl b{font-weight:700;font-size:clamp(18px,3.2vmin,34px)}
-  .lbl span{font-weight:300;font-size:clamp(18px,3.2vmin,34px)}
-  .lbl i{display:block;font-style:normal;font-weight:400;font-size:clamp(9px,1.5vmin,15px);color:#555;letter-spacing:.06em}
 </style>
 </head>
 <body>
-<canvas id="gl"></canvas>
-
-<!-- reference-style callout (scene 0) -->
 <div id="hud">
 <svg id="svg">
-  <path   id="br" class="ln" pathLength="1"/>
-  <polyline id="ld" class="ln" pathLength="1"/>
-  <polygon id="hx" class="ln" pathLength="1"/>
-  <circle id="hd" r="1.6" fill="#222"/>
-  <text id="dt"></text>
-  <text id="dv"><tspan id="dv1"></tspan><tspan id="dv2"></tspan></text>
-  <text id="ce"></text>
-  <text id="t1"></text><text id="t2"></text>
-  <g id="multi"></g>
+  <g id="head">
+    <path id="hbr" class="ln" pathLength="1"/>
+    <text id="hdt"></text>
+    <text id="hdv"><tspan id="hdv1"></tspan><tspan id="hdv2"></tspan></text>
+    <text id="hce"></text>
+  </g>
+  <g id="calls"></g>
 </svg>
 </div>
-
+<script src="vendor/three.min.js"></script>
 <script>
 "use strict";
 /* =====================================================================
-   SHADER: every pixel is computed from formulas — no video, no textures.
-   Units: lengths are fractions of screen HEIGHT; q = frag/H, p = q - centre.
-   ===================================================================== */
-const VS = `attribute vec2 a;void main(){gl_Position=vec4(a,0.,1.);}`;
-const FS = `
-precision highp float;
-uniform vec2  uRes, uC;      // resolution (px), ring centre (H-units)
-uniform float uT, uPaper, uTone, uThick, uOff, uOffAng, uWob, uScal, uSpike, uDust, uGrain, uMass, uRad;
-uniform float uSpikeAng, uSpikeSpread, uFringe, uFrAng, uInv;
-uniform float uDark;         // 0 black screen .. 1 shown
-uniform float uStreak, uSA, uSB;   // ink streak progress, start x, end x (H-units)
+   REHOBOAM — one continuous, volumetric, data-driven animation.
 
-const float PI = 3.14159265;
+   A polar mesh (the disc) is displaced in Z by the ink field (vertex
+   shader) and the ink itself is computed per pixel (fragment shader).
+   Field units ("u"): the ring radius is uRad = 0.4 u; the mesh is in
+   world units where 1 world = 0.4 u (ring radius = 1 world).
+
+   Data -> shape:
+     every sensor owns an angle on the ring; its divergence (0..1) is the
+     height of its spike (spring-damped);
+     global divergence D drives thickness, crescent offset, hair fringe,
+     dust, swelling mass; the crescent forms on the side of the strongest
+     disturbance.
+   ===================================================================== */
+
+const NSP = 12;   // max spikes (sensors)
+const COMMON = `
+uniform float uTilt,uT,uWob,uScal,uThick,uOff,uOffAng,uMass,uRad,uSpikeW,uDust,uFringe,uFrAng,uGrain,uTone,uInv,uZ;
+uniform vec4 uSp[${NSP}];   // x = angle, y = height (u), z = width factor, w = unused
+const float PI=3.14159265;
 float hash(vec3 p){p=fract(p*.3183099+.1);p*=17.;return fract(p.x*p.y*p.z*(p.x+p.y+p.z));}
 float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec3 x){
@@ -64,246 +61,384 @@ float noise(vec3 x){
 float fbm(vec3 p){float s=0.,a=.5;for(int i=0;i<5;i++){s+=a*noise(p);p*=2.03;a*=.5;}return s;}
 float angd(float a,float b){return abs(mod(a-b+PI,2.*PI)-PI);}
 
-void main(){
-  vec2 q=gl_FragCoord.xy/uRes.y;
-  vec2 p=q-uC;
-  float r=length(p);
-  float a=atan(p.y,p.x);
-  vec2 dir=p/max(r,1e-4);
+// Sum of all sensor spikes at angle a: a conical needle, two side bristles,
+// and a travelling ripple on the rim around its base.
+float spikes(float a){
+  float s=0.;
+  for(int i=0;i<${NSP};i++){
+    vec4 sp=uSp[i];
+    float d=angd(a,sp.x);
+    float w=uSpikeW*sp.z;
+    float needle=pow(max(0.,1.-d/w),2.6);
+    float br=.35*pow(max(0.,1.-angd(a,sp.x+w*1.25)/(w*.45)),2.)
+            +.25*pow(max(0.,1.-angd(a,sp.x-w*1.1)/(w*.35)),2.);
+    br*=.6+.4*sin(uT*1.7+sp.x*5.);
+    float rip=.05*sin(d*90.-uT*2.5)*exp(-d/(w*2.5));
+    s+=sp.y*(needle+br+rip);
+  }
+  return s;
+}
+`;
 
-  // ---- edge: perfect circle + regular scallops + slow ink wander ----
+const VS = COMMON + `
+varying vec2 vP; varying vec3 vL;
+void main(){
+  vec2 p=position.xy*.4;
+  float r=length(p), a=atan(p.y,p.x);
+  vec2 dir=p/max(r,1e-4);
+  float n1=fbm(vec3(dir*2.2,uT*.22));
+  float Rb=uRad+uWob*(n1-.5)*.06;
+  float sp=spikes(a);
+  float sw=.012;
+  float Ro=Rb+sp;
+  float outer=1.-smoothstep(Ro-sw,Ro+sw,r);
+  vec2 c=vec2(cos(uOffAng),sin(uOffAng))*uOff;
+  float Ri=Rb-uThick;
+  float inner=1.-smoothstep(Ri-sw,Ri+sw,length(p-c));
+  float ink=outer*(1.-inner);
+  // ink is a raised, lumpy relief; spikes also rise toward the viewer
+  // soft crescent mass (same construction as in the fragment shader, without detail)
+  float side=smoothstep(-.3,1.,cos(a-uFrAng));
+  vec2 cm=-vec2(cos(uFrAng),sin(uFrAng))*uMass*.15;
+  float mIn=smoothstep(Rb-.04*uMass-.002,Rb+.04*uMass+.002,length(p-cm));
+  float Rom=Rb+uMass*(.015+.11*side);
+  float mOut=1.-smoothstep(Rom-.05*uMass-.002,Rom+.05*uMass+.002,r);
+  float mass=mIn*mOut*smoothstep(0.,.05,uMass);
+  float lump=.35+.65*fbm(vec3(p*14.,uT*.3));
+  float z=ink*uZ*lump+mass*uZ*1.8*lump;
+  z+=sp*.45*smoothstep(Rb,Ro,r)*outer;
+  vec3 pos=vec3(position.xy,z/.4);
+  vP=position.xy; vL=pos;
+  gl_Position=projectionMatrix*modelViewMatrix*vec4(pos,1.);
+}`;
+
+const FS = COMMON + `
+varying vec2 vP; varying vec3 vL;
+void main(){
+  vec2 p=vP*.4;
+  float r=length(p), a=atan(p.y,p.x);
+  vec2 dir=p/max(r,1e-4);
+  float aa=fwidth(r);
+
+  // edge: circle + regular scallops + slow ink wander + sensor spikes
   float n1=fbm(vec3(dir*2.2,uT*.22));
   float n2=fbm(vec3(dir*11.,uT*.55));
   float n3=noise(vec3(dir*38.,uT*1.4));
-  float Rb=uRad + uWob*(n1-.5)*.06;
-  // scallops: ~34 evenly spaced bumps, phase slowly drifting, amplitude breathing
-  float ph=a*30.+ (n1-.5)*2.2 + uT*.15;
+  float Rb=uRad+uWob*(n1-.5)*.06;
+  float ph=a*30.+(n1-.5)*2.2+uT*.15;
   float scal=uScal*(sin(ph)*.7+sin(ph*.5+1.3)*.3)*(.75+.5*noise(vec3(dir*5.,uT*.3)));
-  float Ro=Rb + scal + uWob*((n2-.5)*.02+(n3-.5)*.006);
-
-  // spikes
-  for(int i=0;i<10;i++){
-    float fi=float(i);
-    float ai=uSpikeAng+(fi-4.5)*uSpikeSpread+sin(fi*12.9898)*uSpikeSpread*.6+uT*(0.02+0.01*sin(fi*7.));
-    float d=angd(a,ai);
-    float h=(.012+.05*fract(sin(fi*91.7)*43758.5))*uSpike*(.55+.45*sin(uT*.6+fi*3.1));
-    float w=.012+.02*fract(sin(fi*37.1)*917.3);
-    Ro+=h*pow(max(0.,1.-d/w),2.5);
-  }
-  // where the streak lands the rim is pulled outward
-  float dl=angd(a,PI);
-  Ro+=uStreak*.011*exp(-pow(dl/.035,2.))*(.6+.8*noise(vec3(a*30.,0.,uT)));
-
-  // swelling mass
-  float soft=.0022+uMass*.05;
-  Ro+=uMass*(.05+.07*fbm(vec3(dir*3.,uT*.3)));
+  float Ro=Rb+scal+uWob*((n2-.5)*.02+(n3-.5)*.006)+spikes(a);
+  float soft=max(.0018,aa*1.2);
   float outer=1.-smoothstep(Ro-soft,Ro+soft,r);
 
-  // inner disc (offset -> crescent) ; ring thickness wanders along the rim
+  // inner disc, offset -> crescent; thickness wanders along the rim
   vec2 c=vec2(cos(uOffAng),sin(uOffAng))*uOff;
   float th=uThick*(.65+.7*noise(vec3(dir*14.,uT*.2)));
   float Ri=Rb-th+scal*.6+(n2-.5)*.004*uWob;
   float di=length(p-c);
-  float innerSoft=.0014+uMass*.06;
-  float inner=1.-smoothstep(Ri-innerSoft,Ri+innerSoft,di);
+  float isoft=max(.0014,aa*1.2);
+  float inner=1.-smoothstep(Ri-isoft,Ri+isoft,di);
   float ink=outer*(1.-inner);
 
-  // ink bleed + dust
+  // bleed haze, radial hair fringe (heavy on the crescent side), dust
   float out_=max(r-Ro,0.);
   float rim=smoothstep(Ro-.003,Ro+.003,r);
   float haze=rim*exp(-out_/.018)*smoothstep(.42,.75,n2)*.55*uWob;
-  float dustD=rim*exp(-out_/.04)*uDust*smoothstep(.35,.7,n1);
-  float spec=step(1.-dustD*.5,hash2(floor(gl_FragCoord.xy/2.)));
-  // radial 'hair' fringe, heavy on the crescent side (comb-like striations)
   float side=smoothstep(-.3,1.,cos(a-uFrAng));
+
+  // ---- soft black mass (crescent) on the disturbed side ----
+  // the white disc keeps a crisp edge; the mass slides over it with a
+  // blurred boundary striated by radial streaks (noise fast in angle, slow in radius)
+  float strk=noise(vec3(dir*70.,r*2.5+uT*.1));
+  float strk2=noise(vec3(dir*18.,r*1.5-uT*.05));
+  vec2 cm=-vec2(cos(uFrAng),sin(uFrAng))*uMass*.15;
+  float Rim=Rb+(strk-.5)*.05*uMass+(strk2-.5)*.03*uMass;
+  float mIn=smoothstep(Rim-.035*uMass-.002,Rim+.035*uMass+.002,length(p-cm));
+  float Rom=Rb+uMass*(.015+.11*side*(.6+.8*strk2))+(strk-.5)*.04*uMass;
+  float mOut=1.-smoothstep(Rom-.05*uMass-.002,Rom+.05*uMass+.002,r);
+  float mass=mIn*mOut*smoothstep(0.,.05,uMass);
+
   float hair=noise(vec3(dir*46.,r*9.+uT*.25));
   float fr=rim*exp(-out_/(.015+.07*side))*smoothstep(.35,.85,hair)*uFringe*(.25+.9*side);
-  float a_ink=clamp(ink+haze*(1.-ink)+fr*(1.-ink)+spec*(1.-inner),0.,1.);
+  float dustD=rim*exp(-out_/.04)*uDust*smoothstep(.35,.7,n1);
+  float spec=step(1.-dustD*.5,hash2(floor(gl_FragCoord.xy/1.5)));
+  float A=clamp(ink+mass*(1.-ink)+haze*(1.-ink)+fr*(1.-ink)+spec*(1.-inner),0.,1.);
+  A*=1.-uGrain*.55*hash2(floor(gl_FragCoord.xy*.8)+floor(uT*6.));
 
-  // grainy ink texture on thin ring
-  a_ink*=1.-uGrain*.55*hash2(floor(gl_FragCoord.xy*.8)+floor(uT*6.));
-
-  // ---- horizontal ink streak from the hexagon to the ring ----
-  float streak=0.;
-  if(uStreak>0.){
-    float t=(q.x-uSA)/(uSB-uSA);
-    if(t>0.&&t<1.){
-      float reach=smoothstep(uStreak,uStreak-.14,t);
-      float jit=(noise(vec3(q.x*40.,0.,uT*.5))-.5)*.0035+(noise(vec3(q.x*9.,3.,uT*.2))-.5)*.004;
-      float w=(.0021+.0048*t*t)*(.6+.8*noise(vec3(q.x*70.,1.,uT*.8)));
-      float d=abs(q.y-uC.y-jit);
-      float core=1.-smoothstep(w*.55,w,d);
-      float blot=smoothstep(.6,.82,noise(vec3(q.x*55.,q.y*170.,uT*.3)))*(1.-smoothstep(w*1.3,w*3.6,d))*t*1.3;
-      streak=(core*(.55+.45*t)+blot)*reach;
-    }
-  }
-  a_ink=clamp(a_ink+streak*(1.-a_ink),0.,1.);
-
-  // ---- paper ----
-  vec3 paper=vec3(uPaper,uPaper+.003,uPaper-.015);
-  vec3 white=paper+.035;
-  float vig=1.-.06*smoothstep(.35,1.,length(q-.5*vec2(uRes.x/uRes.y,1.)));
-  vec3 bg=mix(vec3(.03),paper*vig,uDark);
-  vec3 disc=mix(vec3(.04),white*vig,uDark);
-  vec3 col=mix(bg,disc,inner*outer);
-  vec3 inkc=vec3(uTone)+.03*n2;
-  inkc=mix(inkc,vec3(.04),clamp(streak*1.2,0.,1.));
-  col=mix(col,inkc,a_ink);
-  col+=(hash2(gl_FragCoord.xy+fract(uT)*100.)-.5)*.014;
+  // relief shading: slopes of the displaced ink catch a little light
+  vec3 n=normalize(cross(dFdx(vL),dFdy(vL)));
+  float slope=1.-abs(n.z);
+  vec3 col=vec3(uTone)+.03*n2+slope*.32*uTilt;   // relief shows only when the disc turns
+  col+=(hash2(gl_FragCoord.xy+fract(uT)*100.)-.5)*.02;
   col=mix(col,1.-col,uInv);
-  gl_FragColor=vec4(col,1.);
+  gl_FragColor=vec4(col,A);
 }`;
 
-/* ---------- gl setup ---------- */
-const cv=document.getElementById('gl');
-const gl=cv.getContext('webgl',{antialias:false,preserveDrawingBuffer:true})||cv.getContext('experimental-webgl');
-function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);
-  if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(o));return o;}
-const pr=gl.createProgram();gl.attachShader(pr,sh(gl.VERTEX_SHADER,VS));gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,FS));
-gl.linkProgram(pr);gl.useProgram(pr);
-const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
-gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
-const loc=gl.getAttribLocation(pr,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
-const UN=['uRes','uC','uT','uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak','uSA','uSB','uSpikeAng','uSpikeSpread','uFringe','uFrAng','uInv'];
-const U={};UN.forEach(n=>U[n]=gl.getUniformLocation(pr,n));
-let DPR=Math.min(window.devicePixelRatio||1,1.5),W=innerWidth,H=innerHeight;
-function resize(){W=innerWidth;H=innerHeight;cv.width=Math.round(W*DPR);cv.height=Math.round(H*DPR);gl.viewport(0,0,cv.width,cv.height);
-  const s=document.getElementById('svg');s.setAttribute('viewBox',`0 0 ${W} ${H}`);}
+/* ---------- three.js setup ---------- */
+const Q=new URLSearchParams(location.search);
+const renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
+document.body.prepend(renderer.domElement);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(30,1,.1,50);
+const RING_SCREEN=.36;   // ring radius as a fraction of screen height
+camera.position.z=(.5/RING_SCREEN)/Math.tan(15*Math.PI/180);
+
+// polar grid: angular x radial, radius 0.6..1.95 world (the interior never holds ink)
+function polarGeometry(nA,nR,r0,r1){
+  const pos=new Float32Array((nA+1)*(nR+1)*3), idx=[];
+  let k=0;
+  for(let j=0;j<=nR;j++){const r=r0+(r1-r0)*j/nR;
+    for(let i=0;i<=nA;i++){const a=i/nA*Math.PI*2;pos[k++]=Math.cos(a)*r;pos[k++]=Math.sin(a)*r;pos[k++]=0;}}
+  for(let j=0;j<nR;j++)for(let i=0;i<nA;i++){
+    const a=j*(nA+1)+i,b=a+1,c=a+nA+1,d=c+1;idx.push(a,c,b,b,c,d);}
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  g.setIndex(idx);return g;
+}
+const LOW=Q.get('q')==='low';
+const geo=polarGeometry(LOW?360:640,LOW?120:220,.6,1.95);
+
+const U={
+  uTilt:{value:0},uT:{value:0},uWob:{value:.22},uScal:{value:.0017},uThick:{value:.0072},uOff:{value:0},uOffAng:{value:0},
+  uMass:{value:0},uRad:{value:.4},uSpikeW:{value:.06},uDust:{value:0},uFringe:{value:0},uFrAng:{value:Math.PI},
+  uGrain:{value:.3},uTone:{value:.13},uInv:{value:0},uZ:{value:.02},
+  uSp:{value:Array.from({length:NSP},()=>new THREE.Vector4(0,0,1,0))},
+};
+const mat=new THREE.ShaderMaterial({uniforms:U,vertexShader:VS,fragmentShader:FS,
+  transparent:true,depthWrite:false,side:THREE.DoubleSide,extensions:{derivatives:true}});
+const mesh=new THREE.Mesh(geo,mat);scene.add(mesh);
+
+let W=innerWidth,H=innerHeight;
+function resize(){W=innerWidth;H=innerHeight;renderer.setSize(W,H);camera.aspect=W/H;camera.updateProjectionMatrix();
+  document.getElementById('svg').setAttribute('viewBox',`0 0 ${W} ${H}`);}
 addEventListener('resize',resize);resize();
 
-/* ---------- scenes ----------
-   cx,cy = ring centre as fraction of width/height (reference frame: .636 / .508) */
-const SENS=[['TEMPERATURE','21.4 °C','LIVING ROOM'],['HUMIDITY','48 %','BEDROOM'],['DOOR','CLOSED','ENTRANCE'],['LIGHTS','12 OF 14','WHOLE HOUSE'],['BATTERY','82 %','SENSOR 07'],
-  ['CONNECTIVITY','-54 dBm','ZIGBEE'],['ENERGY','1.8 kW','MAIN PANEL'],['CO2','612 ppm','KITCHEN'],['MOTION','NONE','HALLWAY'],['WATER','NORMAL','BATHROOM']];
-const SCENES=[
- { // reference: perfectly round thin ring; the 'divergence' is one long spike pointing at the hexagon
-   p:{cx:.636,cy:.508,uPaper:.985,uTone:.13,uThick:.0072,uOff:0,uOffAng:0,uWob:.22,uScal:.0017,uSpike:.5,uSpikeAng:.9,uSpikeSpread:.05,uDust:0,uGrain:.3,uMass:0,uRad:.387,uFringe:0,uFrAng:3.14},
-   ref:true, dur:12 },
- { // crescent with hair fringe (clip 3)
-   p:{cx:.5,cy:.5,uPaper:.915,uTone:.035,uThick:.012,uOff:.042,uOffAng:0,uWob:1.2,uScal:0,uSpike:1,uSpikeAng:.6,uSpikeSpread:.5,uDust:.55,uGrain:0,uMass:0,uRad:.40,uFringe:.6,uFrAng:3.14},
-   calls:[{side:'R',y:.84,t:'DIVERGENCE: ',n:'KITCHEN',a:'2.39 ARC SECONDS',b:'FOCAL POINT: DOOR SENSOR'}], dur:8 },
- { // critical: swelling black crescent mass, one callout per sensor
-   p:{cx:.5,cy:.5,uPaper:.82,uTone:.03,uThick:.045,uOff:.075,uOffAng:0,uWob:1.3,uScal:0,uSpike:1.1,uSpikeAng:1.7,uSpikeSpread:.1,uDust:.8,uGrain:0,uMass:.55,uRad:.33,uFringe:1.1,uFrAng:3.14},
-   calls:SENS.map((v,i)=>({side:i%2?'R':'L',y:.07+.84*Math.floor(i/2)/4,t:'DIVERGENCE: ',n:v[0],a:v[1],b:'FOCAL POINT: '+v[2]})), dur:12 },
+/* ---------- sensors: each owns an angle on the ring (deg, CCW from +x) ---------- */
+const SENSORS=[
+  {id:'temp', name:'TEMPERATURE', place:'LIVING ROOM', ang:200, w:1.0},
+  {id:'hum',  name:'HUMIDITY',    place:'BEDROOM',     ang:38,  w:.8},
+  {id:'door', name:'DOOR',        place:'ENTRANCE',    ang:178, w:1.3},
+  {id:'light',name:'LIGHTS',      place:'WHOLE HOUSE', ang:62,  w:.9},
+  {id:'bat',  name:'BATTERY',     place:'SENSOR 07',   ang:236, w:.7},
+  {id:'net',  name:'CONNECTIVITY',place:'ZIGBEE',      ang:338, w:.9},
+  {id:'pwr',  name:'ENERGY',      place:'MAIN PANEL',  ang:146, w:1.1},
+  {id:'co2',  name:'CO2',         place:'KITCHEN',     ang:14,  w:.8},
+  {id:'mot',  name:'MOTION',      place:'HALLWAY',     ang:272, w:1.2},
+  {id:'water',name:'WATER',       place:'BATHROOM',    ang:306, w:1.0},
 ];
-const Q=new URLSearchParams(location.search);
-let cur=+Q.get('scene')||0, tScene=performance.now();
-const P={...SCENES[cur].p,uDark:0,uStreak:0,uInv:Q.get('inv')==='1'?1:0};
-let invT=P.uInv;
-const T0=performance.now();
-const fixedT=Q.has('t')?+Q.get('t'):null;
-const fixedS=Q.has('ts')?+Q.get('ts'):null;   // scene-local time for screenshots
+SENSORS.forEach((s,i)=>Object.assign(s,{i,a:s.ang*Math.PI/180,div:0,target:.03,h:0,v:0,vis:0,y:null,str:''}));
+const byId=Object.fromEntries(SENSORS.map(s=>[s.id,s]));
 
+const SNAP=Q.get('snap')==='1';
+const FIXED_T=Q.has('t')?+Q.get('t'):null;
+let auto=!Q.has('d');
+if(Q.has('d'))Q.get('d').split(',').forEach((v,i)=>{if(SENSORS[i])SENSORS[i].target=+v;});
+
+/* public API for the smart-home bridge */
+window.Rehoboam={
+  set(id,div){const s=byId[id];if(s){s.target=Math.max(0,Math.min(1,div));s.hold=performance.now()+8000;}},
+  sensors:SENSORS,
+  auto(on){auto=on;},
+};
+
+/* ---------- demo driver (until real data is connected) ---------- */
+let nextEvt=0;
+function simulate(now,dt){
+  // targets relax back toward calm unless held (fixed ?d= values never relax)
+  if(Q.has('d'))return;
+  SENSORS.forEach(s=>{if(!(s.hold>now))s.target+=(.03-s.target)*Math.min(1,dt*.12);});
+  if(!auto||now<nextEvt)return;
+  const r=Math.random();
+  if(r<.12){ // cascade: many sensors diverge at once
+    SENSORS.forEach(s=>{if(Math.random()<.7){s.target=.5+Math.random()*.5;s.hold=now+6000;}});
+    nextEvt=now+11000;
+  }else{
+    const s=SENSORS[Math.floor(Math.random()*SENSORS.length)];
+    s.target=.15+Math.pow(Math.random(),1.5)*.8;s.hold=now+3000+Math.random()*4000;
+    nextEvt=now+1800+Math.random()*3500;
+  }
+}
+
+/* ---------- interaction ---------- */
+let drag=null,dragYaw=0,dragPitch=0,invT=Q.get('inv')==='1'?1:0;
+addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,yaw:dragYaw,pitch:dragPitch};});
+addEventListener('pointermove',e=>{if(!drag)return;
+  dragYaw=Math.max(-.9,Math.min(.9,drag.yaw+(e.clientX-drag.x)/W*2.2));
+  dragPitch=Math.max(-.7,Math.min(.7,drag.pitch+(e.clientY-drag.y)/H*1.8));});
+addEventListener('pointerup',()=>drag=null);addEventListener('pointercancel',()=>drag=null);
+addEventListener('keydown',e=>{
+  const k='1234567890'.indexOf(e.key);
+  if(k>=0&&SENSORS[k])Rehoboam.set(SENSORS[k].id,.9);
+  if(e.key==='c')SENSORS.forEach(s=>Rehoboam.set(s.id,.6+Math.random()*.4));
+  if(e.key==='r')SENSORS.forEach(s=>{s.target=.03;s.hold=0;});
+  if(e.key==='a')auto=!auto;
+  if(e.key==='i')invT=1-invT;
+});
+
+/* ---------- HUD helpers ---------- */
 const $=id=>document.getElementById(id);
-const ease=x=>x*x*(3-2*x), clamp01=x=>Math.max(0,Math.min(1,x));
-const seg=(t,a,b)=>clamp01((t-a)/(b-a));
-const typed=(s,t,a,b)=>s.slice(0,Math.round(s.length*seg(t,a,b)));
-
-function go(i){cur=(i+SCENES.length)%SCENES.length;tScene=performance.now();buildMulti();}
-addEventListener('pointerdown',()=>go(cur+1));
-addEventListener('keydown',e=>{if(e.key>='1'&&e.key<='9')go(+e.key-1);if(e.key==='i')invT=1-invT;});
-
-/* ---------- reference callout (scene 0) ----------
-   Coordinates come from the 700x525 reference frame, scaled by s = H/525. */
-const HEXR=18;
-function hexPts(x,y,r){let o=[];for(let k=0;k<6;k++){const a=(-90+60*k)*Math.PI/180;o.push([x+r*Math.cos(a),y+r*Math.sin(a)]);}return o;}
+const NS='http://www.w3.org/2000/svg';
+const clamp01=x=>Math.max(0,Math.min(1,x)), ease=x=>x*x*(3-2*x);
+const smooth=(a,b,x)=>{const t=clamp01((x-a)/(b-a));return t*t*(3-2*t);};
+const typedP=(s,p)=>s.slice(0,Math.round(s.length*clamp01(p)));
+function mk(tag,cls){const e=document.createElementNS(NS,tag);if(cls)e.setAttribute('class',cls);return e;}
 function setDraw(el,k){el.style.strokeDasharray='1 1.001';el.style.strokeDashoffset=String(1-k);el.style.opacity=k>0?1:0;}
-function callout(t){
-  const s=H/525, cx=P.cx*W, cy=P.cy*H, R=P.uRad*H;
-  const hx=.183*W, hy=cy, hr=HEXR*s;
-  const L=25*s;
-  // bracket frame with chamfered corner
-  $('br').setAttribute('d',`M${L},${42*s} L${L},${94*s} L${L+8*s},${104*s} L${285*s},${104*s} L${296*s},${94*s}`);
-  const hv=hexPts(hx,hy,hr);
-  // leader goes from the frame's lower-left corner to the hexagon's upper-left vertex
-  $('ld').setAttribute('points',`${L+8*s},${104*s} ${hv[5][0]},${hv[5][1]}`);
-  $('hx').setAttribute('points',hv.map(v=>v.join(',')).join(' '));
-  $('hd').setAttribute('cx',hx);$('hd').setAttribute('cy',hy);
-  $('svg').querySelectorAll('.ln').forEach(e=>e.style.strokeWidth=(1.1*s)+'');
-  setDraw($('br'),ease(seg(t,.6,1.8)));
-  setDraw($('ld'),ease(seg(t,1.4,2.8)));
-  setDraw($('hx'),ease(seg(t,2.6,3.3)));
-  $('hd').style.opacity=seg(t,3.1,3.4);
+function hexPts(x,y,r){let o=[];for(let k=0;k<6;k++){const a=(-90+60*k)*Math.PI/180;o.push([x+r*Math.cos(a),y+r*Math.sin(a)]);}return o;}
 
-  const fs=(px,w)=>({'font-size':px*s,'font-weight':w});
+// build one callout per sensor (hidden until the sensor diverges)
+SENSORS.forEach(s=>{
+  const g=mk('g'),br=mk('path','ln'),ld=mk('polyline','ln'),hx=mk('polygon','ln'),
+        tt=mk('text'),b=mk('tspan'),n=mk('tspan'),l2=mk('text'),l3=mk('text');
+  [br,ld,hx].forEach(e=>e.setAttribute('pathLength',1));
+  b.style.fontWeight=600;n.style.fontWeight=300;tt.append(b,n);
+  g.append(br,ld,hx,tt,l2,l3);$('calls').appendChild(g);
+  s.el={g,br,ld,hx,tt,b,n,l2,l3};
+});
+
+function project(x,y,z){const v=new THREE.Vector3(x,y,z).applyMatrix4(mesh.matrixWorld).project(camera);
+  return [(v.x+1)/2*W,(1-v.y)/2*H];}
+
+function layoutCallouts(dt){
+  const s=Math.max(.75,H/525), bw=175*s, gap=40*s, top=128*s, bot=H-34*s;
+  const [cx,cy]=project(0,0,0);
+  const groups={L:[],R:[]};
+  SENSORS.forEach(se=>{
+    const active=se.div>(se.vis>.01?.13:.18);
+    se.vis+=((active?1:0)-se.vis)*Math.min(1,dt*(active?1.6:2.4));
+    if(SNAP)se.vis=active?1:0;
+    if(se.vis<.003){se.el.g.style.display='none';return;}
+    se.el.g.style.display='';
+    const tipR=(.4+se.h)/.4+.03;
+    se.tip=project(Math.cos(se.a)*tipR,Math.sin(se.a)*tipR,se.h*.5/.4);
+    se.side=Math.cos(se.a)<0?'L':'R';
+    groups[se.side].push(se);
+  });
+  for(const side of ['L','R']){
+    const g=groups[side].sort((a,b)=>a.tip[1]-b.tip[1]);
+    let prev=top-gap;
+    g.forEach(se=>{se.ty=Math.max(prev+gap,Math.min(bot,se.tip[1]-12*s));prev=se.ty;});
+    const over=prev-bot;if(over>0)g.forEach(se=>se.ty=Math.max(top,se.ty-over));
+    g.forEach(se=>{se.y=(se.y===null||SNAP)?se.ty:se.y+(se.ty-se.y)*Math.min(1,dt*4);});
+  }
+  SENSORS.forEach(se=>{
+    if(se.vis<.003)return;
+    const e=se.el,p=se.vis,x=se.side==='L'?.025*W:W-.025*W-bw,y=se.y,ey=y+24*s;
+    e.br.setAttribute('d',`M${x},${y-10*s} L${x},${ey-4*s} L${x+4*s},${ey} L${x+bw*.92},${ey}`);
+    // hexagon sits just beyond the spike tip, pushed outward from the centre
+    let dx=se.tip[0]-cx,dy=se.tip[1]-cy;const dl=Math.hypot(dx,dy)||1;dx/=dl;dy/=dl;
+    const hr=7*s,hxp=se.tip[0]+dx*hr*1.6,hyp=se.tip[1]+dy*hr*1.6;
+    const hv=hexPts(hxp,hyp,hr);
+    const ex=se.side==='L'?x+bw*.92:x;
+    // attach the leader to the hexagon vertex facing the box
+    let best=hv[0],bd=1e9;hv.forEach(v=>{const d=Math.hypot(v[0]-ex,v[1]-ey);if(d<bd){bd=d;best=v;}});
+    e.ld.setAttribute('points',`${ex},${ey} ${best[0]},${best[1]}`);
+    e.hx.setAttribute('points',hv.map(v=>v.join(',')).join(' '));
+    [e.br,e.ld,e.hx].forEach(l=>l.style.strokeWidth=(1*s)+'');
+    setDraw(e.br,ease(clamp01(p*2.2)));setDraw(e.ld,ease(clamp01(p*2-.5)));setDraw(e.hx,ease(clamp01(p*2.5-1.2)));
+    // refresh the numbers once a second
+    const now=performance.now();
+    if(!se.strT||now-se.strT>1000){se.str=(se.div*24).toFixed(3)+' ARC DEGREES';se.strT=now;}
+    const put=(el,yy,px,w,fill)=>{el.setAttribute('x',x+7*s);el.setAttribute('y',yy);el.style.fontSize=px*s+'px';el.style.fontWeight=w;if(fill)el.style.fill=fill;};
+    put(e.tt,y+3*s,13,400);e.b.textContent=typedP('DIVERGENCE: ',p*2.5-.2);e.n.textContent=typedP(se.name,p*2.5-.6);
+    put(e.l2,y+13*s,8,400,'#444');e.l2.textContent=typedP(se.str,p*2.5-.9);
+    put(e.l3,y+21.5*s,8,400,'#666');e.l3.textContent=typedP('FOCAL POINT: '+se.place,p*2.5-1.1);
+  });
+}
+
+// header (top-left, as in the reference frame)
+let headName='',headP=0;
+function header(D,top,dt){
+  const s=Math.max(.75,H/525),L=25*s;
+  $('hbr').setAttribute('d',`M${L},${42*s} L${L},${94*s} L${L+8*s},${104*s} L${285*s},${104*s} L${296*s},${94*s}`);
+  $('hbr').style.strokeWidth=(1.1*s)+'';setDraw($('hbr'),1);
+  const d=new Date(),pad=n=>String(n).padStart(2,'0');
   const T=(id,x,y,px,w,fill,str)=>{const e=$(id);e.setAttribute('x',x);e.setAttribute('y',y);
     e.style.fontSize=px*s+'px';e.style.fontWeight=w;if(fill)e.style.fill=fill;e.textContent=str;};
-  T('dt',41*s,57*s,17,600,'#222',typed('02.27.58',t,1.0,1.7));
-  const e=$('dv');e.setAttribute('x',41*s);e.setAttribute('y',83*s);e.style.fontSize=26*s+'px';
-  $('dv1').style.fontWeight=600;$('dv2').style.fontWeight=300;
-  $('dv1').textContent=typed('DIVERGENCE',t,1.3,2.2);
-  $('dv2').textContent=typed(' : UNKNOWN LOCATION',t,2.2,3.4);
-  T('ce',41*s,98*s,10.5,400,'#b5b5b5',typed('CRITICAL EVENT',t,2.0,2.9));
-  // tiny captions beside the streak
-  const sx=hx+hr+10*s;
-  T('t1',sx+8*s,hy-9*s,6.5,400,'#777',typed('R.H-0227 / SECTOR 03',t,3.4,4.2));
-  T('t2',sx+22*s,hy+15*s,6.5,400,'#777',typed('DV 0.0041  SUM 118',t,3.6,4.4));
-  // streak geometry for the shader (H-units)
-  return {sa:(hx+hr)/H, sb:(cx-R)/H, cy:1-cy/H, cxH:cx/H, streak:ease(seg(t,3.3,6.4))};
-}
-
-
-/* ---------- multi callouts (one per sensor / event) ---------- */
-const NS='http://www.w3.org/2000/svg';
-let M=[];
-function mk(tag,cls){const e=document.createElementNS(NS,tag);if(cls)e.setAttribute('class',cls);return e;}
-function buildMulti(){
-  const g=$('multi');g.innerHTML='';M=[];
-  (SCENES[cur].calls||[]).forEach(c=>{
-    const br=mk('path','ln'),ld=mk('polyline','ln'),tt=mk('text'),b=mk('tspan'),n=mk('tspan'),l2=mk('text'),l3=mk('text');
-    br.setAttribute('pathLength',1);ld.setAttribute('pathLength',1);
-    b.style.fontWeight=600;n.style.fontWeight=300;tt.append(b,n);
-    [br,ld,tt,l2,l3].forEach(e=>g.appendChild(e));
-    M.push({c,br,ld,tt,b,n,l2,l3});
-  });
-}
-function updateMulti(t){
-  const s=H/525,cx=P.cx*W,cy=P.cy*H,R=P.uRad*H,bw=190*s;
-  M.forEach((m,i)=>{
-    const c=m.c,x=c.side==='L'?.025*W:W-.025*W-bw,y=c.y*H+14*s,ey=y+24*s;
-    const t0=.5+.3*i;
-    m.br.setAttribute('d',`M${x},${y-10*s} L${x},${ey-4*s} L${x+4*s},${ey} L${x+bw*.92},${ey}`);
-    const ex=c.side==='L'?x+bw*.92:x;
-    const dy=Math.max(-.92*R,Math.min(.92*R,ey-cy)),dx=Math.sqrt(R*R-dy*dy);
-    const tx=cx+(c.side==='L'?-dx:dx),ty=cy+dy;
-    m.ld.setAttribute('points',`${ex},${ey} ${tx},${ty}`);
-    m.br.style.strokeWidth=m.ld.style.strokeWidth=(1*s)+'';
-    setDraw(m.br,ease(seg(t,t0,t0+.5)));setDraw(m.ld,ease(seg(t,t0+.4,t0+1.2)));
-    const put=(e,yy,px,w,fill)=>{e.setAttribute('x',x+7*s);e.setAttribute('y',yy);e.style.fontSize=px*s+'px';e.style.fontWeight=w;if(fill)e.style.fill=fill;};
-    put(m.tt,y+3*s,13,400);m.b.textContent=typed(c.t,t,t0+.2,t0+.7);m.n.textContent=typed(c.n,t,t0+.7,t0+1.1);
-    put(m.l2,y+13*s,8,400,'#444');m.l2.textContent=typed(c.a,t,t0+.9,t0+1.4);
-    put(m.l3,y+21.5*s,8,400,'#666');m.l3.textContent=typed(c.b,t,t0+1.1,t0+1.8);
-  });
+  T('hdt',41*s,57*s,17,600,'#222',`${pad(d.getMonth()+1)}.${pad(d.getDate())}.${String(d.getFullYear()).slice(2)}  ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`);
+  const name=D>.15&&top?top.name:'NOMINAL';
+  if(name!==headName){headName=name;headP=SNAP?1:0;}
+  headP=Math.min(1,headP+dt*1.4);
+  $('hdv').setAttribute('x',41*s);$('hdv').setAttribute('y',83*s);$('hdv').style.fontSize=26*s+'px';
+  $('hdv1').style.fontWeight=600;$('hdv2').style.fontWeight=300;
+  $('hdv1').textContent='DIVERGENCE';
+  $('hdv2').textContent=' : '+typedP(name,headP);
+  const st=D>.7?'CRITICAL EVENT':D>.35?'ELEVATED SCRUTINY':'STABLE';
+  T('hce',41*s,98*s,10.5,400,D>.7?'#555':'#b5b5b5',st);
 }
 
 /* ---------- main loop ---------- */
+let D=0,Dv=0,massX=-1,massY=0,last=performance.now();
+const T0=performance.now();
+const MAXF=+Q.get('frames')||0;let nF=0;
+const P={uThick:.0072,uOff:0,uWob:.22,uScal:.0017,uDust:0,uFringe:0,uMass:0,uTone:.13,uGrain:.3,uZ:.02,uInv:invT,paper:.985};
 function frame(now){
-  const t=fixedT!==null?fixedT:(now-T0)/1000;
-  const since=fixedS!==null?fixedS:(now-tScene)/1000;
-  if(fixedT===null&&fixedS===null&&since>SCENES[cur].dur)go(cur+1);
-  const sc=SCENES[cur], tg=sc.p, k=(fixedS!==null)?1:.04;
-  for(const n in tg)P[n]+=(tg[n]-P[n])*k;
-  const fade=fixedS!==null?1:ease(Math.min(1,since/1.2));
-  P.uDark=fade;
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  const t=FIXED_T!==null?FIXED_T:(now-T0)/1000;
+  simulate(now,dt);
 
-  let sa=0,sb=1,cyH=0,cxH=0;
-  const hud=$('hud');
-  hud.style.opacity=fade;hud.style.filter=`invert(${P.uInv})`;
-  ['br','ld','hx','hd','dt','dv','ce','t1','t2'].forEach(id=>$(id).style.display=sc.ref?'':'none');
-  if(sc.ref){const g=callout(since);sa=g.sa;sb=g.sb;P.uStreak=g.streak;}
-  else{P.uStreak+=(0-P.uStreak)*.08;updateMulti(since);}
-  P.uInv+=(invT-P.uInv)*.08;
-  cyH=1-P.cy; cxH=P.cx*W/H;
-  gl.uniform2f(U.uRes,cv.width,cv.height);
-  gl.uniform2f(U.uC,cxH,cyH);
-  gl.uniform1f(U.uT,t);
-  gl.uniform1f(U.uSA,sc.ref?sa:0);gl.uniform1f(U.uSB,sc.ref?sb:1);
-  for(const n of ['uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak','uSpikeAng','uSpikeSpread','uFringe','uFrAng','uInv'])
-    gl.uniform1f(U[n],P[n]);
-  gl.drawArrays(gl.TRIANGLES,0,3);
+  // sensors: spring-damped spike heights (u units)
+  let mx=0,sum=0,vx=0,vy=0,top=null;
+  SENSORS.forEach(s=>{
+    s.div+=(s.target-s.div)*Math.min(1,dt*3);if(SNAP)s.div=s.target;
+    const ht=Math.max(0,s.div-.05)*.15, k=42, c=7.5;
+    s.v+=(k*(ht-s.h)-c*s.v)*dt;s.h+=s.v*dt;if(SNAP){s.h=ht;s.v=0;}
+    if(s.div>mx){mx=s.div;top=s;}sum+=s.div;
+    vx+=Math.cos(s.a)*s.div*s.div;vy+=Math.sin(s.a)*s.div*s.div;
+  });
+  // global divergence: driven by how much of the house diverges, not by one sensor
+  const Dt=clamp01(1.7*sum/SENSORS.length+.1*mx);
+  Dv+=(42*(Dt-D)*.25-6*Dv)*dt;D+=Dv*dt;D=clamp01(D);if(SNAP)D=Dt;
+
+  // the crescent gathers on the side of the strongest disturbance
+  if(Math.hypot(vx,vy)>.02){const l=Math.hypot(vx,vy);
+    massX+=(vx/l-massX)*Math.min(1,dt*.8);massY+=(vy/l-massY)*Math.min(1,dt*.8);
+    if(SNAP){massX=vx/l;massY=vy/l;}}
+  const massAng=Math.atan2(massY,massX);
+
+  // divergence -> shape parameters
+  const tg={
+    uThick:.0072+.012*D,
+    uOff:0,
+    uWob:.22+.6*D,
+    uScal:.0017*(1-D)+.0006,
+    uDust:.25*smooth(.5,1,D),
+    uFringe:.9*smooth(.4,1,D),
+    uMass:smooth(.35,1,D),
+    uTone:.13+(.03-.13)*smooth(0,.5,D),
+    uGrain:.3*(1-D),
+    uZ:.02+.05*D,
+    uInv:invT,
+    paper:.985+(.86-.985)*smooth(.5,1,D),
+  };
+  for(const n in tg)P[n]+=(tg[n]-P[n])*(SNAP?1:Math.min(1,dt*3));
+  for(const n in tg)if(U[n])U[n].value=P[n];
+  U.uT.value=t;
+  U.uOffAng.value=massAng+Math.PI;   // inner disc slides away -> black mass on the disturbed side
+  U.uFrAng.value=massAng;
+  SENSORS.forEach((s,i)=>U.uSp.value[i].set(s.a,s.h,s.w,0));
+
+  // background paper (inverted at night)
+  const pv=P.paper;
+  const pc=Math.round((pv+(1-2*pv)*P.uInv)*255);
+  renderer.setClearColor(new THREE.Color(`rgb(${pc},${pc},${Math.max(0,pc-4)})`));
+  document.body.style.background=`rgb(${pc},${pc},${pc})`;
+
+  // volumetric sway + drag tilt (springs back when released)
+  if(!drag){dragYaw*=1-Math.min(1,dt*1.5);dragPitch*=1-Math.min(1,dt*1.5);}
+  const sway=Q.has('sway')?+Q.get('sway'):1;
+  mesh.rotation.y=(Q.has('yaw')?+Q.get('yaw'):.12*Math.sin(t*.11)*sway)+dragYaw;
+  mesh.rotation.x=(Q.has('pitch')?+Q.get('pitch'):.07*Math.sin(t*.07+1)*sway)+dragPitch;
+  mesh.updateMatrixWorld();
+  U.uTilt.value=clamp01((Math.abs(mesh.rotation.y)+Math.abs(mesh.rotation.x))*2.5);
+
+  renderer.render(scene,camera);
+  $('hud').style.filter=`invert(${P.uInv})`;
+  header(D,top,dt);
+  layoutCallouts(dt);
+  if(MAXF&&++nF>=MAXF)return;   // test hook: stop after N frames
   requestAnimationFrame(frame);
 }
-buildMulti();
 requestAnimationFrame(frame);
 </script>
 </body>

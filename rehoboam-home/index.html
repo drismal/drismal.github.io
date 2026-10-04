@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
@@ -10,7 +10,7 @@
   html,body{margin:0;height:100%;background:#000;overflow:hidden;touch-action:manipulation;-webkit-user-select:none;user-select:none}
   canvas{position:fixed;inset:0;width:100%;height:100%;display:block}
   #hud,#lblwrap{position:fixed;inset:0;pointer-events:none;
-       font-family:"RC","Roboto Condensed","Arial Narrow",sans-serif}
+       font-family:"RC","Barlow Condensed","Arial Narrow",sans-serif}
   svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
   svg .ln{fill:none;stroke:#2b2b2b;stroke-linejoin:miter;stroke-linecap:butt}
   svg text{fill:#1d1d1d;letter-spacing:.02em}
@@ -34,11 +34,9 @@
   <text id="dv"><tspan id="dv1"></tspan><tspan id="dv2"></tspan></text>
   <text id="ce"></text>
   <text id="t1"></text><text id="t2"></text>
+  <g id="multi"></g>
 </svg>
 </div>
-
-<!-- simple label (other scenes) -->
-<div id="lblwrap"><div class="lbl" id="lbl"><b id="l1"></b><span id="l1b"></span><i id="l2"></i><i id="l3"></i></div></div>
 
 <script>
 "use strict";
@@ -51,6 +49,7 @@ const FS = `
 precision highp float;
 uniform vec2  uRes, uC;      // resolution (px), ring centre (H-units)
 uniform float uT, uPaper, uTone, uThick, uOff, uOffAng, uWob, uScal, uSpike, uDust, uGrain, uMass, uRad;
+uniform float uSpikeAng, uSpikeSpread, uFringe, uFrAng, uInv;
 uniform float uDark;         // 0 black screen .. 1 shown
 uniform float uStreak, uSA, uSB;   // ink streak progress, start x, end x (H-units)
 
@@ -85,7 +84,7 @@ void main(){
   // spikes
   for(int i=0;i<10;i++){
     float fi=float(i);
-    float ai=fi*0.63+sin(fi*12.9898)*2.2+uT*(0.02+0.01*sin(fi*7.));
+    float ai=uSpikeAng+(fi-4.5)*uSpikeSpread+sin(fi*12.9898)*uSpikeSpread*.6+uT*(0.02+0.01*sin(fi*7.));
     float d=angd(a,ai);
     float h=(.012+.05*fract(sin(fi*91.7)*43758.5))*uSpike*(.55+.45*sin(uT*.6+fi*3.1));
     float w=.012+.02*fract(sin(fi*37.1)*917.3);
@@ -93,7 +92,7 @@ void main(){
   }
   // where the streak lands the rim is pulled outward
   float dl=angd(a,PI);
-  Ro+=uStreak*.006*exp(-pow(dl/.05,2.))*(.6+.8*noise(vec3(a*30.,0.,uT)));
+  Ro+=uStreak*.011*exp(-pow(dl/.035,2.))*(.6+.8*noise(vec3(a*30.,0.,uT)));
 
   // swelling mass
   float soft=.0022+uMass*.05;
@@ -115,7 +114,11 @@ void main(){
   float haze=rim*exp(-out_/.018)*smoothstep(.42,.75,n2)*.55*uWob;
   float dustD=rim*exp(-out_/.04)*uDust*smoothstep(.35,.7,n1);
   float spec=step(1.-dustD*.5,hash2(floor(gl_FragCoord.xy/2.)));
-  float a_ink=clamp(ink+haze*(1.-ink)+spec*(1.-inner),0.,1.);
+  // radial 'hair' fringe, heavy on the crescent side (comb-like striations)
+  float side=smoothstep(-.3,1.,cos(a-uFrAng));
+  float hair=noise(vec3(dir*46.,r*9.+uT*.25));
+  float fr=rim*exp(-out_/(.015+.07*side))*smoothstep(.35,.85,hair)*uFringe*(.25+.9*side);
+  float a_ink=clamp(ink+haze*(1.-ink)+fr*(1.-ink)+spec*(1.-inner),0.,1.);
 
   // grainy ink texture on thin ring
   a_ink*=1.-uGrain*.55*hash2(floor(gl_FragCoord.xy*.8)+floor(uT*6.));
@@ -147,6 +150,7 @@ void main(){
   inkc=mix(inkc,vec3(.04),clamp(streak*1.2,0.,1.));
   col=mix(col,inkc,a_ink);
   col+=(hash2(gl_FragCoord.xy+fract(uT)*100.)-.5)*.014;
+  col=mix(col,1.-col,uInv);
   gl_FragColor=vec4(col,1.);
 }`;
 
@@ -160,7 +164,7 @@ gl.linkProgram(pr);gl.useProgram(pr);
 const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
 gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),gl.STATIC_DRAW);
 const loc=gl.getAttribLocation(pr,'a');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
-const UN=['uRes','uC','uT','uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak','uSA','uSB'];
+const UN=['uRes','uC','uT','uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak','uSA','uSB','uSpikeAng','uSpikeSpread','uFringe','uFrAng','uInv'];
 const U={};UN.forEach(n=>U[n]=gl.getUniformLocation(pr,n));
 let DPR=Math.min(window.devicePixelRatio||1,1.5),W=innerWidth,H=innerHeight;
 function resize(){W=innerWidth;H=innerHeight;cv.width=Math.round(W*DPR);cv.height=Math.round(H*DPR);gl.viewport(0,0,cv.width,cv.height);
@@ -169,20 +173,23 @@ addEventListener('resize',resize);resize();
 
 /* ---------- scenes ----------
    cx,cy = ring centre as fraction of width/height (reference frame: .636 / .508) */
+const SENS=[['TEMPERATURE','21.4 °C','LIVING ROOM'],['HUMIDITY','48 %','BEDROOM'],['DOOR','CLOSED','ENTRANCE'],['LIGHTS','12 OF 14','WHOLE HOUSE'],['BATTERY','82 %','SENSOR 07'],
+  ['CONNECTIVITY','-54 dBm','ZIGBEE'],['ENERGY','1.8 kW','MAIN PANEL'],['CO2','612 ppm','KITCHEN'],['MOTION','NONE','HALLWAY'],['WATER','NORMAL','BATHROOM']];
 const SCENES=[
- { // reference: perfectly round thin ring, callout -> hexagon -> ink streak into the ring
-   p:{cx:.636,cy:.508,uPaper:.985,uTone:.13,uThick:.0072,uOff:0,uOffAng:0,uWob:.22,uScal:.0017,uSpike:0,uDust:0,uGrain:.3,uMass:0,uRad:.387},
+ { // reference: perfectly round thin ring; the 'divergence' is one long spike pointing at the hexagon
+   p:{cx:.636,cy:.508,uPaper:.985,uTone:.13,uThick:.0072,uOff:0,uOffAng:0,uWob:.22,uScal:.0017,uSpike:.5,uSpikeAng:.9,uSpikeSpread:.05,uDust:0,uGrain:.3,uMass:0,uRad:.387,uFringe:0,uFrAng:3.14},
    ref:true, dur:12 },
- { // crescent (clip 3)
-   p:{cx:.5,cy:.5,uPaper:.915,uTone:.035,uThick:.012,uOff:.042,uOffAng:.12,uWob:1.2,uScal:0,uSpike:1,uDust:.55,uGrain:0,uMass:0,uRad:.42},
-   lbl:{l1:'DIVERGENCE: ',l1b:'КУХНЯ',l2:'2.39 ARC SECONDS',l3:'FOCAL POINT: ДАТЧИК ДВЕРИ',pos:{right:'3.5vw',bottom:'5vh'}}, dur:7 },
- { // swelling mass
-   p:{cx:.5,cy:.5,uPaper:.82,uTone:.035,uThick:.05,uOff:.05,uOffAng:.5,uWob:1.4,uScal:0,uSpike:1.1,uDust:.8,uGrain:0,uMass:.6,uRad:.36},
-   lbl:{l1:'DIVERGENCE: ',l1b:'ТРЕВОГА',l2:'ALL SENSORS',l3:'FOCAL POINT: 21.4813°N, 109.1202°E',pos:{left:'3.5vw',top:'4vh'}}, dur:7 },
+ { // crescent with hair fringe (clip 3)
+   p:{cx:.5,cy:.5,uPaper:.915,uTone:.035,uThick:.012,uOff:.042,uOffAng:0,uWob:1.2,uScal:0,uSpike:1,uSpikeAng:.6,uSpikeSpread:.5,uDust:.55,uGrain:0,uMass:0,uRad:.40,uFringe:.6,uFrAng:3.14},
+   calls:[{side:'R',y:.84,t:'DIVERGENCE: ',n:'KITCHEN',a:'2.39 ARC SECONDS',b:'FOCAL POINT: DOOR SENSOR'}], dur:8 },
+ { // critical: swelling black crescent mass, one callout per sensor
+   p:{cx:.5,cy:.5,uPaper:.82,uTone:.03,uThick:.045,uOff:.075,uOffAng:0,uWob:1.3,uScal:0,uSpike:1.1,uSpikeAng:1.7,uSpikeSpread:.1,uDust:.8,uGrain:0,uMass:.55,uRad:.33,uFringe:1.1,uFrAng:3.14},
+   calls:SENS.map((v,i)=>({side:i%2?'R':'L',y:.07+.84*Math.floor(i/2)/4,t:'DIVERGENCE: ',n:v[0],a:v[1],b:'FOCAL POINT: '+v[2]})), dur:12 },
 ];
 const Q=new URLSearchParams(location.search);
 let cur=+Q.get('scene')||0, tScene=performance.now();
-const P={...SCENES[cur].p,uDark:0,uStreak:0};
+const P={...SCENES[cur].p,uDark:0,uStreak:0,uInv:Q.get('inv')==='1'?1:0};
+let invT=P.uInv;
 const T0=performance.now();
 const fixedT=Q.has('t')?+Q.get('t'):null;
 const fixedS=Q.has('ts')?+Q.get('ts'):null;   // scene-local time for screenshots
@@ -192,16 +199,9 @@ const ease=x=>x*x*(3-2*x), clamp01=x=>Math.max(0,Math.min(1,x));
 const seg=(t,a,b)=>clamp01((t-a)/(b-a));
 const typed=(s,t,a,b)=>s.slice(0,Math.round(s.length*seg(t,a,b)));
 
-function setLabel(){
-  const s=SCENES[cur],el=$('lbl');
-  el.style.left=el.style.right=el.style.top=el.style.bottom='auto';
-  if(s.lbl)Object.assign(el.style,s.lbl.pos);
-  el.style.textAlign=s.lbl&&s.lbl.pos.right?'right':'left';
-}
-function go(i){cur=(i+SCENES.length)%SCENES.length;tScene=performance.now();setLabel();}
+function go(i){cur=(i+SCENES.length)%SCENES.length;tScene=performance.now();buildMulti();}
 addEventListener('pointerdown',()=>go(cur+1));
-addEventListener('keydown',e=>{if(e.key>='1'&&e.key<='9')go(+e.key-1);});
-setLabel();
+addEventListener('keydown',e=>{if(e.key>='1'&&e.key<='9')go(+e.key-1);if(e.key==='i')invT=1-invT;});
 
 /* ---------- reference callout (scene 0) ----------
    Coordinates come from the 700x525 reference frame, scaled by s = H/525. */
@@ -228,18 +228,52 @@ function callout(t){
   const fs=(px,w)=>({'font-size':px*s,'font-weight':w});
   const T=(id,x,y,px,w,fill,str)=>{const e=$(id);e.setAttribute('x',x);e.setAttribute('y',y);
     e.style.fontSize=px*s+'px';e.style.fontWeight=w;if(fill)e.style.fill=fill;e.textContent=str;};
-  T('dt',41*s,57*s,17,700,'#222',typed('02.27.58',t,1.0,1.7));
+  T('dt',41*s,57*s,17,600,'#222',typed('02.27.58',t,1.0,1.7));
   const e=$('dv');e.setAttribute('x',41*s);e.setAttribute('y',83*s);e.style.fontSize=26*s+'px';
-  $('dv1').style.fontWeight=700;$('dv2').style.fontWeight=300;
+  $('dv1').style.fontWeight=600;$('dv2').style.fontWeight=300;
   $('dv1').textContent=typed('DIVERGENCE',t,1.3,2.2);
   $('dv2').textContent=typed(' : UNKNOWN LOCATION',t,2.2,3.4);
   T('ce',41*s,98*s,10.5,400,'#b5b5b5',typed('CRITICAL EVENT',t,2.0,2.9));
   // tiny captions beside the streak
   const sx=hx+hr+10*s;
   T('t1',sx+8*s,hy-9*s,6.5,400,'#777',typed('R.H-0227 / SECTOR 03',t,3.4,4.2));
-  T('t2',sx+22*s,hy+15*s,6.5,400,'#777',typed('Δ 0.0041  Σ 118',t,3.6,4.4));
+  T('t2',sx+22*s,hy+15*s,6.5,400,'#777',typed('DV 0.0041  SUM 118',t,3.6,4.4));
   // streak geometry for the shader (H-units)
   return {sa:(hx+hr)/H, sb:(cx-R)/H, cy:1-cy/H, cxH:cx/H, streak:ease(seg(t,3.3,6.4))};
+}
+
+
+/* ---------- multi callouts (one per sensor / event) ---------- */
+const NS='http://www.w3.org/2000/svg';
+let M=[];
+function mk(tag,cls){const e=document.createElementNS(NS,tag);if(cls)e.setAttribute('class',cls);return e;}
+function buildMulti(){
+  const g=$('multi');g.innerHTML='';M=[];
+  (SCENES[cur].calls||[]).forEach(c=>{
+    const br=mk('path','ln'),ld=mk('polyline','ln'),tt=mk('text'),b=mk('tspan'),n=mk('tspan'),l2=mk('text'),l3=mk('text');
+    br.setAttribute('pathLength',1);ld.setAttribute('pathLength',1);
+    b.style.fontWeight=600;n.style.fontWeight=300;tt.append(b,n);
+    [br,ld,tt,l2,l3].forEach(e=>g.appendChild(e));
+    M.push({c,br,ld,tt,b,n,l2,l3});
+  });
+}
+function updateMulti(t){
+  const s=H/525,cx=P.cx*W,cy=P.cy*H,R=P.uRad*H,bw=190*s;
+  M.forEach((m,i)=>{
+    const c=m.c,x=c.side==='L'?.025*W:W-.025*W-bw,y=c.y*H+14*s,ey=y+24*s;
+    const t0=.5+.3*i;
+    m.br.setAttribute('d',`M${x},${y-10*s} L${x},${ey-4*s} L${x+4*s},${ey} L${x+bw*.92},${ey}`);
+    const ex=c.side==='L'?x+bw*.92:x;
+    const dy=Math.max(-.92*R,Math.min(.92*R,ey-cy)),dx=Math.sqrt(R*R-dy*dy);
+    const tx=cx+(c.side==='L'?-dx:dx),ty=cy+dy;
+    m.ld.setAttribute('points',`${ex},${ey} ${tx},${ty}`);
+    m.br.style.strokeWidth=m.ld.style.strokeWidth=(1*s)+'';
+    setDraw(m.br,ease(seg(t,t0,t0+.5)));setDraw(m.ld,ease(seg(t,t0+.4,t0+1.2)));
+    const put=(e,yy,px,w,fill)=>{e.setAttribute('x',x+7*s);e.setAttribute('y',yy);e.style.fontSize=px*s+'px';e.style.fontWeight=w;if(fill)e.style.fill=fill;};
+    put(m.tt,y+3*s,13,400);m.b.textContent=typed(c.t,t,t0+.2,t0+.7);m.n.textContent=typed(c.n,t,t0+.7,t0+1.1);
+    put(m.l2,y+13*s,8,400,'#444');m.l2.textContent=typed(c.a,t,t0+.9,t0+1.4);
+    put(m.l3,y+21.5*s,8,400,'#666');m.l3.textContent=typed(c.b,t,t0+1.1,t0+1.8);
+  });
 }
 
 /* ---------- main loop ---------- */
@@ -253,29 +287,23 @@ function frame(now){
   P.uDark=fade;
 
   let sa=0,sb=1,cyH=0,cxH=0;
-  const hud=$('hud'),lw=$('lblwrap');
-  if(sc.ref){
-    const g=callout(since); sa=g.sa;sb=g.sb;P.uStreak=g.streak;
-    hud.style.opacity=1;lw.style.opacity=0;
-  }else{
-    P.uStreak+=(0-P.uStreak)*.08;
-    hud.style.opacity=0;lw.style.opacity=fade;
-    const L=sc.lbl,kk=Math.floor((since-.5)*26);
-    const cut=(s,o)=>s.slice(0,Math.max(0,Math.min(s.length,kk-o)));
-    const a=L.l1.length,b=a+L.l1b.length,c=b+L.l2.length;
-    $('l1').textContent=cut(L.l1,0);$('l1b').textContent=cut(L.l1b,a);
-    $('l2').textContent=cut(L.l2,b);$('l3').textContent=cut(L.l3,c);
-  }
+  const hud=$('hud');
+  hud.style.opacity=fade;hud.style.filter=`invert(${P.uInv})`;
+  ['br','ld','hx','hd','dt','dv','ce','t1','t2'].forEach(id=>$(id).style.display=sc.ref?'':'none');
+  if(sc.ref){const g=callout(since);sa=g.sa;sb=g.sb;P.uStreak=g.streak;}
+  else{P.uStreak+=(0-P.uStreak)*.08;updateMulti(since);}
+  P.uInv+=(invT-P.uInv)*.08;
   cyH=1-P.cy; cxH=P.cx*W/H;
   gl.uniform2f(U.uRes,cv.width,cv.height);
   gl.uniform2f(U.uC,cxH,cyH);
   gl.uniform1f(U.uT,t);
   gl.uniform1f(U.uSA,sc.ref?sa:0);gl.uniform1f(U.uSB,sc.ref?sb:1);
-  for(const n of ['uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak'])
+  for(const n of ['uPaper','uTone','uThick','uOff','uOffAng','uWob','uScal','uSpike','uDust','uGrain','uMass','uRad','uDark','uStreak','uSpikeAng','uSpikeSpread','uFringe','uFrAng','uInv'])
     gl.uniform1f(U[n],P[n]);
   gl.drawArrays(gl.TRIANGLES,0,3);
   requestAnimationFrame(frame);
 }
+buildMulti();
 requestAnimationFrame(frame);
 </script>
 </body>

@@ -3,7 +3,7 @@ import type { Slot } from '../events/EventBus';
 
 export const RIDGE_BASE = 1.03;   // ridges start at 1.03 R
 export const SPIKE_BASE = 1.04;   // main spike starts at 1.04 R
-export const TIP_JITTER = 0.004;  // radians
+export const TIP_JITTER = 0.0015;  // radians
 
 export function angDiff(a: number, b: number): number {
   const d = Math.abs((((a - b + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI);

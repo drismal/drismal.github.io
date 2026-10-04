@@ -187,42 +187,47 @@ export class Callouts {
       const s = c.slotRef!;
       if (c.state === 'in') c.setTexts(s, this.strings);
       c.measure(R0);
+      // live tip: only the marker and the first leader segment follow it
       spikeTip(s, cx, cy, R, jitPhase, this.tip);
       const M = this.tip;
-      const kR = R / R0;
-      const ro = 0.075 * R;
-      const mDist = Math.hypot(M.x - cx, M.y - cy);
+      // the text block is anchored to a *still* tip: resting ring (no breathing, drift or jitter)
+      // and the full spike length (no energy boil) — so the text never shivers
+      const cx0 = W / 2, cy0 = H / 2, Rk = R0 * 1.03;   // 1.03: room for breathing + drift
+      const rA = 1.04 + s.spike;
+      const A = { x: cx0 + R0 * rA * Math.cos(s.theta), y: cy0 + R0 * rA * Math.sin(s.theta) };
+      const ro = 0.075 * R0;
+      const mDist = R0 * rA;
       const side0 = Math.cos(s.theta) >= 0 ? 1 : -1;
       const v0 = Math.sin(s.theta) < 0 ? -1 : 1;
 
       // a placement is valid when the block is on screen, outside the ring + ridges + clearance,
       // does not cover the marker, other blocks or their leaders
       const ok = (ch: Choice) => {
-        const g = this.geometry(c, M, ch.dy, ch.s, ch.v, ch.sc * kR, R, ch.slant);
+        const g = this.geometry(c, A, ch.dy, ch.s, ch.v, ch.sc, R0, ch.slant);
         if (g.r.x0 < mx || g.r.x1 > W - mx || g.r.y0 < my || g.r.y1 > H - my) return false;
-        if (rectDist(g.r, cx, cy) < R * (1.03 + maxRidge * ch.ridge + ch.clear)) return false;
+        if (rectDist(g.r, cx0, cy0) < Rk * (1.03 + maxRidge * ch.ridge + ch.clear)) return false;
         // the leader must not cut across the ring or the ridges
-        if (segDist(M.x, M.y, g.ux, g.uy, cx, cy) < Math.min(R * (1.1 + maxRidge), mDist * 0.98)) return false;
-        if (inRect(g.r, M.x, M.y, ro)) return false;
+        if (segDist(A.x, A.y, g.ux, g.uy, cx0, cy0) < Math.min(Rk * (1.1 + maxRidge), mDist * 0.98)) return false;
+        if (inRect(g.r, A.x, A.y, ro * 1.3)) return false;
         if (this.placed.some((p) => overlap(p, g.r, 10))) return false;
-        if (this.placed.some((p) => segHits(p, M.x, M.y, g.ux, g.uy))) return false;
+        if (this.placed.some((p) => segHits(p, A.x, A.y, g.ux, g.uy))) return false;
         return true;
       };
       // keep the current placement while it stays valid (no jumps); search only when it breaks
       if (!c.choice || !ok(c.choice)) {
         c.lastSearch = now;
-        const found = this.search(ok, R, side0, v0);
+        const found = this.search(ok, R0, side0, v0);
         if (found) c.choice = found;
-        else if (!c.choice) c.choice = { dy: 0.4 * R, v: v0, s: side0, sc: 0.5, slant: SLANTS[0], clear: 0, ridge: 0 };
+        else if (!c.choice) c.choice = { dy: 0.4 * R0, v: v0, s: side0, sc: 0.5, slant: SLANTS[0], clear: 0, ridge: 0 };
       }
       const best = c.choice;
       // smooth (snap on first frame or when the block flips)
       if (c.dy < 0 || best.v !== c.vdir || best.s !== c.side || best.slant !== c.slant) {
         c.dy = best.dy; c.vdir = best.v; c.side = best.s; c.sc = best.sc; c.slant = best.slant;
       } else { const k = Math.min(1, dt * 8); c.dy += (best.dy - c.dy) * k; c.sc += (best.sc - c.sc) * k; }
-      const g = this.geometry(c, M, c.dy, c.side, c.vdir, c.sc * kR, R, c.slant);
+      const g = this.geometry(c, A, c.dy, c.side, c.vdir, c.sc, R0, c.slant);
       this.placed.push(g.r);
-      this.draw(c, now, M, g, R, c.sc * kR, ro, pal);
+      this.draw(c, now, M, g, R0, c.sc, ro, pal);
     }
   }
 
@@ -254,7 +259,8 @@ export class Callouts {
     const y4 = uy - 0.02 * R * sc, y3 = y4 - 0.064 * R * sc, y2 = y3 - 0.074 * R * sc, y1 = y2 - 0.095 * R * sc;
     const top = y1 - 0.062 * R * sc;
     const r: Rect = { x0: Math.min(ux, xb) - 2, x1: Math.max(ux, xb) + 2, y0: top, y1: uy + 3 };
-    return { ux, uy, xb, y: [y1, y2, y3, y4], gap, r };
+    const px = (v: number) => Math.round(v) + 0.5;          // crisp 1 px lines, whole-pixel text
+    return { ux: px(ux), uy: px(uy), xb: px(xb), y: [y1, y2, y3, y4].map(Math.round), gap: Math.round(gap), r };
   }
 
   private draw(c: Callout, now: number, M: { x: number; y: number },
@@ -312,7 +318,7 @@ export class Callouts {
       t.setAttribute('x', tx.toFixed(1));
       t.setAttribute('y', g.y[i].toFixed(1));
       t.setAttribute('text-anchor', anchor);
-      t.style.fontSize = `${(FS[i] * R * sc).toFixed(2)}px`;
+      t.style.fontSize = `${(Math.round(FS[i] * R * sc * 2) / 2).toFixed(1)}px`;
       t.style.fill = fills[i];
     }
     c.title.style.fill = pal.title;

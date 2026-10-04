@@ -7,10 +7,10 @@ import frag from '../../shaders/ridges.frag.glsl?raw';
 import { MAX_SLOTS, type Slot } from '../events/EventBus';
 
 export const POOL_MAX = 250000;
-const SPIKE_SHARE = 0.12;
+const SPIKE_SHARE = 0.15;
 // Each of the 8 slots owns a fixed 1/8 of the pool. A slot shows weight / CAP of its
 // partition (clamped to 1): one level-3 sector fills it, smaller events show less.
-const RIDGE_CAP = 0.3;    // height × half-width (R·rad)
+const RIDGE_CAP = 0.12;   // height × half-width (R·rad): a level-2 sector already fills its partition
 const SPIKE_CAP = 0.45;   // spike length (R)
 
 export class Ridges {
